@@ -1,28 +1,31 @@
 import gymnasium as gym
 import heapq
+import numpy as np
 import rware
 from rware.warehouse import Direction
 
 from deadlock.core import DeadlockDetector, EpisodeRecorder, hold_render_window
+from deadlock.global_manager import GlobalTrafficManager
 from deadlock.navigation import FORWARD, NOOP, TURN_LEFT, TURN_RIGHT
+from deadlock.recovery import AdaptiveDeadlockRecovery
 
 
 LAYOUT = """
 xxxxgxxxgxxxgxxxgxxxgxxxx
 xxxx.xxx.xxx.xxx.xxx.xxxx
-xxxx.xxx.xxx.xxx.xxx.xxxx
-xxxx.xxx.xxx.xxx.xxx.xxxx
-g.......................g
-xxxx.xxx.xxx.xxx.xxx.xxxx
-xxxx.xxx.xxx.xxx.xxx.xxxx
+xx.....................xx
 xxxx.xxx.xxx.xxx.xxx.xxxx
 g.......................g
 xxxx.xxx.xxx.xxx.xxx.xxxx
-xxxx.xxx.xxx.xxx.xxx.xxxx
+xx.....................xx
 xxxx.xxx.xxx.xxx.xxx.xxxx
 g.......................g
 xxxx.xxx.xxx.xxx.xxx.xxxx
+xx.....................xx
 xxxx.xxx.xxx.xxx.xxx.xxxx
+g.......................g
+xxxx.xxx.xxx.xxx.xxx.xxxx
+xx.....................xx
 xxxx.xxx.xxx.xxx.xxx.xxxx
 xxxxgxxxgxxxgxxxgxxxgxxxx
 """
@@ -43,19 +46,20 @@ STARTS = [
 ]
 
 ROUTE_LIBRARY = [
-    [(4, 1), (4, 4), (20, 4), (20, 12), (4, 12), (4, 15)],
-    [(8, 1), (8, 8), (20, 8), (20, 4), (8, 4), (8, 15)],
-    [(12, 1), (12, 4), (0, 4), (0, 12), (12, 12), (12, 15)],
-    [(16, 1), (16, 8), (24, 8), (24, 12), (16, 12), (16, 15)],
+    [(4, 1), (4, 4), (20, 4), (20, 14), (4, 14), (4, 15)],
+    [(8, 1), (8, 2), (20, 2), (20, 8), (8, 8), (8, 15)],
+    [(12, 1), (12, 4), (0, 4), (0, 10), (12, 10), (12, 15)],
+    [(16, 1), (16, 6), (24, 6), (24, 12), (16, 12), (16, 15)],
     [(20, 1), (20, 4), (4, 4), (4, 8), (20, 8), (20, 15)],
-    [(0, 4), (12, 4), (12, 12), (24, 12), (24, 8), (0, 8)],
+    [(0, 8), (8, 8), (8, 14), (24, 14), (24, 4), (0, 4)],
 ]
 
 HUMAN_ROUTES = [
-    [(1, 4), (2, 4), (3, 4), (4, 4), (5, 4), (6, 4), (7, 4), (8, 4)],
-    [(10, 8), (11, 8), (12, 8), (13, 8), (14, 8), (15, 8), (16, 8)],
-    [(17, 12), (18, 12), (19, 12), (20, 12), (21, 12), (22, 12), (23, 12)],
-    [(12, 2), (12, 3), (12, 4), (12, 5), (12, 6), (12, 7), (12, 8)],
+    [(1, 4), (2, 4), (3, 4), (4, 4), (5, 4), (6, 4), (7, 4), (8, 4), (9, 4)],
+    [(9, 8), (10, 8), (11, 8), (12, 8), (13, 8), (14, 8), (15, 8), (16, 8)],
+    [(15, 12), (16, 12), (17, 12), (18, 12), (19, 12), (20, 12), (21, 12), (22, 12)],
+    [(12, 2), (12, 3), (12, 4), (12, 5), (12, 6), (12, 7), (12, 8), (12, 9), (12, 10)],
+    [(4, 14), (5, 14), (6, 14), (7, 14), (8, 14), (9, 14), (10, 14)],
 ]
 
 HOTSPOTS = {
@@ -88,12 +92,17 @@ CLOSURE_SCHEDULE = [
     {
         "start": 65,
         "end": 95,
-        "cells": [(12, y) for y in range(6, 11)],
+        "cells": [(12, y) for y in range(5, 11)],
     },
     {
         "start": 105,
         "end": 135,
-        "cells": [(x, 4) for x in range(17, 22)],
+        "cells": [(x, 14) for x in range(15, 21)],
+    },
+    {
+        "start": 145,
+        "end": 175,
+        "cells": [(8, y) for y in range(7, 13)],
     },
 ]
 
@@ -373,12 +382,12 @@ def _traffic_managed_actions(env, route_progress, wait_steps, reservation_state)
     return actions
 
 
-def _apply_closures(env, step):
+def _scheduled_closures(step):
     active = []
     for closure in CLOSURE_SCHEDULE:
         if closure["start"] <= step < closure["end"]:
             active.extend(closure["cells"])
-    env.unwrapped.set_dynamic_blocked_cells(active)
+    return active
 
 
 def run(
@@ -423,13 +432,30 @@ def run(
     )
     env.reset(seed=seed)
     _stage_agents(env)
+    env.unwrapped._agent_wait_steps = np.zeros(env.unwrapped.n_agents, dtype=np.int32)
+    env.unwrapped._position_history.clear()
 
-    route_progress = [0 for _ in env.unwrapped.agents]
-    wait_steps = [0 for _ in env.unwrapped.agents]
-    reservation_state = {}
+    manager = GlobalTrafficManager(
+        env,
+        route_library=ROUTE_LIBRARY,
+        hotspot_radius=1,
+        hotspot_backpressure=1,
+        corridor_penalty=2,
+        human_penalty=8,
+    )
+    recovery = AdaptiveDeadlockRecovery(
+        manager,
+        close_radius=1,
+        penalty_radius=3,
+        closure_ttl=24,
+        penalty_ttl=40,
+        wait_threshold=5,
+        base_penalty=12,
+    )
     detector = DeadlockDetector(patience=6)
     stats = {
         "deadlock_events": 0,
+        "recovery_events": 0,
         "manager_holds": 0,
         "max_blocked_human": 0,
         "max_blocked_agent": 0,
@@ -438,10 +464,11 @@ def run(
     }
 
     for step in range(max_steps):
-        _apply_closures(env, step)
-        actions = _traffic_managed_actions(
-            env, route_progress, wait_steps, reservation_state
-        )
+        recovery.refresh(step)
+        scheduled_blocks = _scheduled_closures(step)
+        adaptive_blocks = sorted(recovery.active_blocked_cells(step))
+        env.unwrapped.set_dynamic_blocked_cells(scheduled_blocks + adaptive_blocks)
+        actions = manager.compute_actions()
         stats["manager_holds"] += sum(action == NOOP for action in actions)
         if recorder.enabled:
             recorder.capture(env)
@@ -450,10 +477,14 @@ def run(
 
         _, rewards, done, truncated, info = env.step(actions)
         metrics = info.get("metrics", {})
-        wait_steps = info.get("wait_steps", wait_steps)
+        wait_steps = info.get("wait_steps", manager.wait_steps)
+        manager.update_wait_steps(wait_steps)
         positions = [(agent.x, agent.y) for agent in env.unwrapped.agents]
         if detector.update(positions):
             stats["deadlock_events"] += 1
+            hotspot = recovery.register_deadlock(step, positions, wait_steps)
+            if hotspot is not None:
+                stats["recovery_events"] += 1
             detector.reset()
 
         stats["max_blocked_human"] = max(
@@ -480,7 +511,8 @@ def run(
                 f"avg_wait={metrics.get('avg_wait_steps', 0.0):.2f} "
                 f"throughput={metrics.get('throughput', 0.0):.2f} "
                 f"reward_sum={sum(rewards):.2f} "
-                f"holds={stats['manager_holds']}"
+                f"holds={stats['manager_holds']} "
+                f"recoveries={stats['recovery_events']}"
             )
 
         if done or truncated:

@@ -1,0 +1,11 @@
+{
+  "fps": 8,
+  "frame_count": 1,
+  "stats": {
+    "deadlock_events": 0,
+    "manager_holds": 2,
+    "max_blocked_human": 1,
+    "max_blocked_agent": 0,
+    "max_avg_wait": 0.75
+  }
+}

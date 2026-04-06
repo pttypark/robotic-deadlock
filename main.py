@@ -5,6 +5,7 @@ warnings.filterwarnings("ignore")
 
 from deadlock.scenarios import (
     factory_complex,
+    factory_complex_gnn,
     factory_floor,
     human_blockage,
     intersection,
@@ -18,6 +19,7 @@ SCENARIOS = {
     "human_blockage": human_blockage.run,
     "factory_floor": factory_floor.run,
     "factory_complex": factory_complex.run,
+    "factory_complex_gnn": factory_complex_gnn.run,
 }
 
 

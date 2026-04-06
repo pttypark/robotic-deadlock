@@ -1,0 +1,10 @@
+{
+  "fps": 8,
+  "frame_count": 1,
+  "stats": {
+    "deadlock_step": null,
+    "resolved": false,
+    "human_blocks": 0,
+    "agent_blocks": 0
+  }
+}
