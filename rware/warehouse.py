@@ -1,4 +1,4 @@
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from enum import Enum
 from typing import List, Tuple, Optional, Dict
 
@@ -68,6 +68,8 @@ class ImageLayer(Enum):
     AGENT_LOAD = 4  # binary layer indicating agents with load
     GOALS = 5  # binary layer indicating goal/ delivery locations
     ACCESSIBLE = 6  # binary layer indicating accessible cells (all but occupied cells/ out of map)
+    HUMANS = 7  # binary layer indicating dynamic human obstacles
+    HUMAN_DANGER = 8  # binary layer indicating human safety radius cells
 
 
 class Entity:
@@ -137,6 +139,23 @@ class Shelf(Entity):
         return (_LAYER_SHELFS,)
 
 
+class Human(Entity):
+    counter = 0
+
+    def __init__(
+        self,
+        x: int,
+        y: int,
+        route: Optional[List[Tuple[int, int]]] = None,
+        route_index: int = 0,
+    ):
+        Human.counter += 1
+        super().__init__(Human.counter, x, y)
+        self.route = route or []
+        self.route_index = route_index
+        self.wait_steps = 0
+
+
 class Warehouse(gym.Env):
     metadata = {
         "render_modes": ["human", "rgb_array"],
@@ -167,6 +186,14 @@ class Warehouse(gym.Env):
         image_observation_directional: bool = True,
         normalised_coordinates: bool = False,
         render_mode: str = "human",
+        human_count: int = 0,
+        human_safety_radius: int = 1,
+        human_move_prob: float = 1.0,
+        human_wait_prob: float = 0.0,
+        human_patrol_routes: Optional[List[List[Tuple[int, int]]]] = None,
+        static_blocked_cells: Optional[List[Tuple[int, int]]] = None,
+        deadlock_patience: int = 3,
+        reward_shaping: Optional[Dict[str, float]] = None,
     ):
         """The robotic warehouse environment
 
@@ -251,6 +278,28 @@ class Warehouse(gym.Env):
         self.max_steps = max_steps
 
         self.normalised_coordinates = normalised_coordinates
+        self.human_count = human_count
+        self.human_safety_radius = human_safety_radius
+        self.human_move_prob = human_move_prob
+        self.human_wait_prob = human_wait_prob
+        self.human_patrol_routes = human_patrol_routes or []
+        self.static_blocked_cells = set(tuple(cell) for cell in (static_blocked_cells or []))
+        self.dynamic_blocked_cells = set()
+        self.deadlock_patience = deadlock_patience
+        self.reward_shaping = {
+            "wait": 0.0,
+            "deadlock": 0.0,
+            "human_block": 0.0,
+            "zone_block": 0.0,
+            "progress": 0.0,
+        }
+        if reward_shaping:
+            self.reward_shaping.update(reward_shaping)
+        self.humans: List[Human] = []
+        self._position_history = deque(maxlen=self.deadlock_patience + 1)
+        self._agent_wait_steps = np.zeros(self.n_agents, dtype=np.int32)
+        self._last_info: Dict = {}
+        self._visual_debug: Dict = {}
 
         sa_action_space = [len(Action), *msg_bits * (2,)]
         if len(sa_action_space) == 1:
@@ -290,6 +339,175 @@ class Warehouse(gym.Env):
         self.global_image = None
         self.renderer = None
         self.render_mode = render_mode
+
+    def _random_direction(self) -> Direction:
+        return self.np_random.choice([d for d in Direction])
+
+    def _highway_cells(self) -> List[Tuple[int, int]]:
+        cells = []
+        for y in range(self.grid_size[0]):
+            for x in range(self.grid_size[1]):
+                if self._is_highway(x, y):
+                    cells.append((x, y))
+        return cells
+
+    def _nearest_goal_distance(self, x: int, y: int) -> int:
+        return min(abs(gx - x) + abs(gy - y) for gx, gy in self.goals)
+
+    def _is_human_blocked(self, x: int, y: int) -> bool:
+        for human in self.humans:
+            if abs(human.x - x) + abs(human.y - y) <= self.human_safety_radius:
+                return True
+        return False
+
+    def _is_zone_blocked(self, x: int, y: int) -> bool:
+        return (x, y) in self.static_blocked_cells or (x, y) in self.dynamic_blocked_cells
+
+    def set_dynamic_blocked_cells(self, cells: List[Tuple[int, int]]):
+        self.dynamic_blocked_cells = set(tuple(cell) for cell in cells)
+
+    def _spawn_humans(self):
+        Human.counter = 0
+        self.humans = []
+        taken = {(agent.x, agent.y) for agent in self.agents}
+        highway_cells = [
+            cell for cell in self._highway_cells() if cell not in taken and cell not in self.goals
+        ]
+
+        for route in self.human_patrol_routes:
+            if not route:
+                continue
+            route_cells = [tuple(cell) for cell in route]
+            start = route_cells[0]
+            if start in taken:
+                continue
+            taken.add(start)
+            self.humans.append(Human(start[0], start[1], route_cells, route_index=0))
+
+        while len(self.humans) < self.human_count and highway_cells:
+            idx = int(self.np_random.integers(0, len(highway_cells)))
+            x, y = highway_cells.pop(idx)
+            if (x, y) in taken:
+                continue
+            taken.add((x, y))
+            self.humans.append(Human(x, y))
+
+    def _move_humans(self):
+        occupied = {(agent.x, agent.y) for agent in self.agents}
+        occupied.update((human.x, human.y) for human in self.humans)
+
+        for human in self.humans:
+            occupied.discard((human.x, human.y))
+            human.prev_x, human.prev_y = human.x, human.y
+
+            if self.np_random.random() < self.human_wait_prob:
+                human.wait_steps += 1
+                occupied.add((human.x, human.y))
+                continue
+
+            if self.np_random.random() > self.human_move_prob:
+                occupied.add((human.x, human.y))
+                continue
+
+            candidates = []
+            if human.route:
+                next_idx = (human.route_index + 1) % len(human.route)
+                candidates = [human.route[next_idx]]
+            else:
+                for dx, dy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)):
+                    nx_, ny_ = human.x + dx, human.y + dy
+                    if (
+                        0 <= nx_ < self.grid_size[1]
+                        and 0 <= ny_ < self.grid_size[0]
+                        and self._is_highway(nx_, ny_)
+                    ):
+                        candidates.append((nx_, ny_))
+
+            moved = False
+            for nx_, ny_ in candidates:
+                if (nx_, ny_) in occupied or (nx_, ny_) in self.goals:
+                    continue
+                human.x, human.y = nx_, ny_
+                if human.route:
+                    human.route_index = (human.route_index + 1) % len(human.route)
+                human.wait_steps = 0
+                moved = True
+                break
+
+            if not moved:
+                human.wait_steps += 1
+
+            occupied.add((human.x, human.y))
+
+    def _compute_deadlock_state(self, positions: List[Tuple[int, int]]) -> bool:
+        self._position_history.append(tuple(positions))
+        if len(self._position_history) < self.deadlock_patience + 1:
+            return False
+        first = self._position_history[0]
+        return all(state == first for state in self._position_history)
+
+    def _build_blocking_info(self, requested_locations: Dict[int, Tuple[int, int]]):
+        blockers = []
+        blocked_by_human = 0
+        blocked_by_agent = 0
+        blocked_by_zone = 0
+        human_positions = {(human.x, human.y): human.id for human in self.humans}
+        agent_positions = {(agent.x, agent.y): agent.id for agent in self.agents}
+
+        for agent in self.agents:
+            target = requested_locations[agent.id]
+            if target == (agent.x, agent.y):
+                continue
+
+            reason = None
+            blocker = None
+            if self._is_human_blocked(*target):
+                blocked_by_human += 1
+                reason = "human"
+                blocker = next(
+                    human.id
+                    for human in self.humans
+                    if abs(human.x - target[0]) + abs(human.y - target[1])
+                    <= self.human_safety_radius
+                )
+            elif self._is_zone_blocked(*target):
+                blocked_by_zone += 1
+                reason = "zone"
+                blocker = None
+            elif target in agent_positions:
+                blocked_by_agent += 1
+                reason = "agent"
+                blocker = agent_positions[target]
+
+            if reason:
+                blockers.append(
+                    {
+                        "agent_id": agent.id,
+                        "target": target,
+                        "reason": reason,
+                        "blocker_id": blocker,
+                    }
+                )
+
+        return blockers, blocked_by_human, blocked_by_agent, blocked_by_zone
+
+    def _update_visual_debug(self, blockers, deadlock_active, deadlock_agents):
+        danger_cells = set()
+        for human in self.humans:
+            for y in range(self.grid_size[0]):
+                for x in range(self.grid_size[1]):
+                    if abs(human.x - x) + abs(human.y - y) <= self.human_safety_radius:
+                        danger_cells.add((x, y))
+
+        self._visual_debug = {
+            "danger_cells": sorted(danger_cells),
+            "blocked_cells": sorted(
+                self.static_blocked_cells.union(self.dynamic_blocked_cells)
+            ),
+            "blockers": blockers,
+            "deadlock_active": deadlock_active,
+            "deadlock_agents": deadlock_agents,
+        }
 
     def _make_layout_from_params(self, shelf_columns, shelf_rows, column_height):
         assert shelf_columns % 2 == 1, "Only odd number of shelf columns is supported"
@@ -566,6 +784,22 @@ class Warehouse(gym.Env):
                     layer = np.ones(self.grid_size, dtype=np.float32)
                     for ag in self.agents:
                         layer[ag.y, ag.x] = 0.0
+                    for human in self.humans:
+                        layer[human.y, human.x] = 0.0
+                elif layer_type == ImageLayer.HUMANS:
+                    layer = np.zeros(self.grid_size, dtype=np.float32)
+                    for human in self.humans:
+                        layer[human.y, human.x] = 1.0
+                elif layer_type == ImageLayer.HUMAN_DANGER:
+                    layer = np.zeros(self.grid_size, dtype=np.float32)
+                    for human in self.humans:
+                        for y in range(self.grid_size[0]):
+                            for x in range(self.grid_size[1]):
+                                if (
+                                    abs(human.x - x) + abs(human.y - y)
+                                    <= self.human_safety_radius
+                                ):
+                                    layer[y, x] = 1.0
                 else:
                     raise ValueError(f"Unknown image layer type: {layer_type}")
 
@@ -744,7 +978,7 @@ class Warehouse(gym.Env):
             return self._get_default_obs(agent)
 
     def _get_info(self):
-        return {}
+        return self._last_info
 
     def _recalc_grid(self):
         self.grid[:] = 0
@@ -763,6 +997,8 @@ class Warehouse(gym.Env):
         Agent.counter = 0
         self._cur_inactive_steps = 0
         self._cur_steps = 0
+        self._position_history.clear()
+        self._agent_wait_steps = np.zeros(self.n_agents, dtype=np.int32)
 
         # n_xshelf = (self.grid_size[1] - 1) // 3
         # n_yshelf = (self.grid_size[0] - 2) // 9
@@ -790,6 +1026,7 @@ class Warehouse(gym.Env):
             Agent(x, y, dir_, self.msg_bits)
             for y, x, dir_ in zip(*agent_locs, agent_dirs)
         ]
+        self._spawn_humans()
 
         self._recalc_grid()
 
@@ -799,12 +1036,35 @@ class Warehouse(gym.Env):
             )
         )
 
+        positions = [(agent.x, agent.y) for agent in self.agents]
+        deadlock_active = self._compute_deadlock_state(positions)
+        blockers, blocked_by_human, blocked_by_agent, blocked_by_zone = self._build_blocking_info(
+            {agent.id: (agent.x, agent.y) for agent in self.agents}
+        )
+        self._update_visual_debug(blockers, deadlock_active, [])
+        self._last_info = {
+            "metrics": {
+                "throughput": 0.0,
+                "stalled_agents": 0,
+                "avg_wait_steps": 0.0,
+                "blocked_by_human": blocked_by_human,
+                "blocked_by_agent": blocked_by_agent,
+                "blocked_by_zone": blocked_by_zone,
+                "deadlock_active": deadlock_active,
+                "deadlock_agents": [],
+                "human_count": len(self.humans),
+            },
+            "blockers": blockers,
+            "humans": [(human.x, human.y) for human in self.humans],
+        }
+
         return tuple([self._make_obs(agent) for agent in self.agents]), self._get_info()
 
     def step(
         self, actions: List[Action]
     ) -> Tuple[List[np.ndarray], List[float], bool, bool, Dict]:
         assert len(actions) == len(self.agents)
+        self._move_humans()
 
         for agent, action in zip(self.agents, actions):
             if self.msg_bits > 0:
@@ -821,10 +1081,12 @@ class Warehouse(gym.Env):
         commited_agents = set()
 
         G = nx.DiGraph()
+        requested_locations = {}
 
         for agent in self.agents:
             start = agent.x, agent.y
             target = agent.req_location(self.grid_size)
+            requested_locations[agent.id] = target
 
             if (
                 agent.carrying_shelf
@@ -840,6 +1102,12 @@ class Warehouse(gym.Env):
                 # there's a standing shelf at the target location
                 # our agent is carrying a shelf so there's no way
                 # this movement can succeed. Cancel it.
+                agent.req_action = Action.NOOP
+                G.add_edge(start, start)
+            elif start != target and self._is_human_blocked(*target):
+                agent.req_action = Action.NOOP
+                G.add_edge(start, start)
+            elif start != target and self._is_zone_blocked(*target):
                 agent.req_action = Action.NOOP
                 G.add_edge(start, start)
             else:
@@ -876,9 +1144,14 @@ class Warehouse(gym.Env):
             agent.req_action = Action.NOOP
 
         rewards = np.zeros(self.n_agents)
+        progress_bonus = np.zeros(self.n_agents)
+        blockers, blocked_by_human, blocked_by_agent, blocked_by_zone = self._build_blocking_info(
+            requested_locations
+        )
 
         for agent in self.agents:
             agent.prev_x, agent.prev_y = agent.x, agent.y
+            prev_distance = self._nearest_goal_distance(agent.x, agent.y)
 
             if agent.req_action == Action.FORWARD:
                 agent.x, agent.y = agent.req_location(self.grid_size)
@@ -897,6 +1170,10 @@ class Warehouse(gym.Env):
                         rewards[agent.id - 1] += 0.5
 
                     agent.has_delivered = False
+
+            new_distance = self._nearest_goal_distance(agent.x, agent.y)
+            if new_distance < prev_distance:
+                progress_bonus[agent.id - 1] = self.reward_shaping["progress"]
 
         self._recalc_grid()
 
@@ -932,6 +1209,31 @@ class Warehouse(gym.Env):
             self._cur_inactive_steps += 1
         self._cur_steps += 1
 
+        positions = [(agent.x, agent.y) for agent in self.agents]
+        wait_flags = []
+        for agent in self.agents:
+            moved = (agent.x, agent.y) != (agent.prev_x, agent.prev_y)
+            if moved:
+                self._agent_wait_steps[agent.id - 1] = 0
+            else:
+                self._agent_wait_steps[agent.id - 1] += 1
+            wait_flags.append(not moved)
+
+        deadlock_active = self._compute_deadlock_state(positions)
+        deadlock_agents = [agent.id for agent in self.agents] if deadlock_active else []
+
+        for idx, agent in enumerate(self.agents):
+            if wait_flags[idx]:
+                rewards[idx] += self.reward_shaping["wait"]
+            rewards[idx] += progress_bonus[idx]
+
+        if blocked_by_human:
+            rewards += self.reward_shaping["human_block"]
+        if blocked_by_zone:
+            rewards += self.reward_shaping["zone_block"]
+        if deadlock_active:
+            rewards += self.reward_shaping["deadlock"]
+
         if (
             self.max_inactivity_steps
             and self._cur_inactive_steps >= self.max_inactivity_steps
@@ -940,6 +1242,29 @@ class Warehouse(gym.Env):
         else:
             done = False
         truncated = False
+
+        throughput = float(np.sum(rewards > 0.25)) / max(1, self.n_agents)
+        avg_wait_steps = float(np.mean(self._agent_wait_steps)) if self.n_agents else 0.0
+        stalled_agents = int(np.sum(self._agent_wait_steps > 0))
+        self._update_visual_debug(blockers, deadlock_active, deadlock_agents)
+        self._last_info = {
+            "metrics": {
+                "throughput": throughput,
+                "stalled_agents": stalled_agents,
+                "avg_wait_steps": avg_wait_steps,
+                "blocked_by_human": blocked_by_human,
+                "blocked_by_agent": blocked_by_agent,
+                "blocked_by_zone": blocked_by_zone,
+                "deadlock_active": deadlock_active,
+                "deadlock_agents": deadlock_agents,
+                "human_count": len(self.humans),
+                "request_queue_size": len(self.request_queue),
+            },
+            "blockers": blockers,
+            "humans": [(human.x, human.y) for human in self.humans],
+            "wait_steps": self._agent_wait_steps.tolist(),
+            "positions": positions,
+        }
 
         new_obs = tuple([self._make_obs(agent) for agent in self.agents])
         info = self._get_info()
@@ -1014,6 +1339,22 @@ class Warehouse(gym.Env):
                     layer = np.ones(self.grid_size, dtype=np.float32)
                     for ag in self.agents:
                         layer[ag.y, ag.x] = 0.0
+                    for human in self.humans:
+                        layer[human.y, human.x] = 0.0
+                elif layer_type == ImageLayer.HUMANS:
+                    layer = np.zeros(self.grid_size, dtype=np.float32)
+                    for human in self.humans:
+                        layer[human.y, human.x] = 1.0
+                elif layer_type == ImageLayer.HUMAN_DANGER:
+                    layer = np.zeros(self.grid_size, dtype=np.float32)
+                    for human in self.humans:
+                        for y in range(self.grid_size[0]):
+                            for x in range(self.grid_size[1]):
+                                if (
+                                    abs(human.x - x) + abs(human.y - y)
+                                    <= self.human_safety_radius
+                                ):
+                                    layer[y, x] = 1.0
                 else:
                     raise ValueError(f"Unknown image layer type: {layer_type}")
                 layers.append(layer)
