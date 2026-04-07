@@ -3,14 +3,9 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-from deadlock.scenarios import (
-    factory_complex,
-    factory_complex_gnn,
-    factory_floor,
-    human_blockage,
-    intersection,
-    single_lane,
-)
+from deadlock.scenarios import factory_complex, factory_complex_gnn, factory_floor
+from deadlock.scenarios.intersection import human_blockage, intersection
+from deadlock.scenarios.single import single_lane
 
 
 SCENARIOS = {
