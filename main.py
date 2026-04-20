@@ -3,7 +3,7 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-from deadlock.scenarios import factory_complex, factory_complex_gnn, factory_floor
+from deadlock.scenarios import dsd_fsd_baseline, factory_complex, factory_complex_gnn, factory_floor
 from deadlock.scenarios.intersection import human_blockage, intersection
 from deadlock.scenarios.single import single_lane
 
@@ -15,6 +15,7 @@ SCENARIOS = {
     "factory_floor": factory_floor.run,
     "factory_complex": factory_complex.run,
     "factory_complex_gnn": factory_complex_gnn.run,
+    "dsd_fsd_baseline": dsd_fsd_baseline.run,
 }
 
 
