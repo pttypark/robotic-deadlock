@@ -78,6 +78,83 @@ def build_paper_points(system="fsd", n_agents=4, aisles=8, bay_rows=18):
     return _build_paper_fsd_points(n_agents=n_agents, aisles=aisles, bay_rows=bay_rows)
 
 
+def build_shared_area_points(n_agents=4):
+    width = 21
+    height = 17
+    center = (10, 8)
+    rows = [["x" for _ in range(width)] for _ in range(height)]
+
+    for y in range(height):
+        rows[y][center[0]] = "."
+    for x in range(width):
+        rows[center[1]][x] = "."
+    for y in range(center[1] - 2, center[1] + 3):
+        for x in range(center[0] - 5, center[0] + 6):
+            rows[y][x] = "."
+    for x, y in (
+        (center[0] - 5, center[1] - 1),
+        (center[0] - 5, center[1] + 1),
+        (center[0] + 5, center[1] - 1),
+        (center[0] + 5, center[1] + 1),
+        (center[0] - 1, center[1] - 5),
+        (center[0] + 1, center[1] - 5),
+        (center[0] - 1, center[1] + 5),
+        (center[0] + 1, center[1] + 5),
+    ):
+        rows[y][x] = "."
+
+    for x, y in ((center[0], 0), (center[0], height - 1), (0, center[1]), (width - 1, center[1])):
+        rows[y][x] = "g"
+
+    core = {
+        (x, y)
+        for y in range(center[1] - 2, center[1] + 3)
+        for x in range(center[0] - 5, center[0] + 6)
+    }
+    decision_points = {
+        (center[0], center[1] - 2),
+        (center[0], center[1] + 2),
+        (center[0] - 2, center[1]),
+        (center[0] + 2, center[1]),
+    }
+    waiting_points = {
+        (center[0], center[1] - 4),
+        (center[0], center[1] + 4),
+        (center[0] - 4, center[1]),
+        (center[0] + 4, center[1]),
+    }
+    escape_points = {
+        (center[0] - 1, center[1] - 1),
+        (center[0] + 1, center[1] - 1),
+        (center[0] - 1, center[1] + 1),
+        (center[0] + 1, center[1] + 1),
+    }
+    conflict_zones = [
+        ConflictZone(
+            id="shared_core",
+            center=center,
+            cells=core,
+            decision_points=decision_points,
+            waiting_points=waiting_points,
+            escape_points=escape_points,
+        )
+    ]
+    storage_points = sorted(decision_points | waiting_points | escape_points)
+    zones = _split_zones(storage_points, [center[0]], n_agents)
+    return PointMap(
+        layout=_rows_to_layout(rows),
+        aisle_columns=[center[0]],
+        transition_rows=[center[1]],
+        storage_points=storage_points,
+        buffer_points=[(center[0], 0), (center[0], height - 1), (0, center[1]), (width - 1, center[1])],
+        decision_points=decision_points,
+        waiting_points=waiting_points,
+        escape_points=escape_points,
+        conflict_zones=conflict_zones,
+        zones=zones,
+    )
+
+
 def _build_paper_fsd_points(n_agents=4, aisles=8, bay_rows=18):
     aisle_columns = [2 + idx * 3 for idx in range(aisles)]
     width = aisle_columns[-1] + 3

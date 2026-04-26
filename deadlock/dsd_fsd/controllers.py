@@ -2,7 +2,7 @@ from collections import defaultdict
 
 from deadlock.dsd_fsd.model import TransactionStatus
 from deadlock.dsd_fsd.routing import action_towards, find_path, manhattan
-from deadlock.navigation import NOOP
+from deadlock.navigation import FORWARD, NOOP
 
 
 class BaseTransactionController:
@@ -381,6 +381,407 @@ class DSDController(BaseTransactionController):
             allowed.update(zone)
             allowed_by_zone.append(allowed)
         return allowed_by_zone
+
+
+class DeadlockProneRuleController(BaseTransactionController):
+    def __init__(self, env, points, service_steps=3):
+        super().__init__(
+            env,
+            points,
+            service_steps=service_steps,
+            stall_threshold=10**9,
+            recovery_ttl=10**9,
+        )
+
+    def _assign_waiting(self, step, ledger):
+        self.attach_ledger(ledger)
+        free = set(self._free_agents())
+        for tx in sorted(ledger.waiting(), key=lambda item: item.created_step):
+            agent_idx = tx.zone_id % len(self.env.unwrapped.agents)
+            if agent_idx not in free:
+                continue
+            self._assign(ledger, tx, agent_idx, step)
+            free.remove(agent_idx)
+
+    def _refresh_recovery_targets(self, step):
+        return
+
+    def _parking_target_for_idx(self, idx):
+        agent = self.env.unwrapped.agents[idx]
+        return (agent.x, agent.y)
+
+    def _nominal_actions(self):
+        actions = [NOOP] * len(self.env.unwrapped.agents)
+        targets = {}
+        for idx, agent in enumerate(self.env.unwrapped.agents):
+            if idx in self.service_until:
+                actions[idx] = NOOP
+                self.stats["holds"] += 1
+                continue
+            target = self._target_for_idx(idx)
+            path = find_path(
+                self.env,
+                (agent.x, agent.y),
+                target,
+                allowed=self._path_allowed_for_target(idx, target),
+                blocked=set(),
+            )
+            action, requested_target = action_towards(agent, path)
+            actions[idx] = action
+            targets[idx] = requested_target
+        return actions, targets
+
+
+class LocalGraphAdmissionController(BaseTransactionController):
+    def __init__(self, env, points, service_steps=3):
+        super().__init__(
+            env,
+            points,
+            service_steps=service_steps,
+            stall_threshold=10**9,
+            recovery_ttl=10**9,
+        )
+        self.core_min_y = 1
+        self.core_max_y = max(1, points.height - 4)
+        self.shared_areas = {
+            zone.id: set(zone.cells)
+            for zone in points.conflict_zones
+            if zone.id.startswith("shared_")
+        }
+        self.area_owner = {}
+        self.stats.update(
+            {
+                "graph_decisions": 0,
+                "admission_holds": 0,
+                "max_core_occupancy": 0,
+                "max_queue_length": 0,
+            }
+        )
+
+    def _assign_waiting(self, step, ledger):
+        self.attach_ledger(ledger)
+        free = set(self._free_agents())
+        for tx in sorted(ledger.waiting(), key=lambda item: item.created_step):
+            agent_idx = tx.zone_id % len(self.env.unwrapped.agents)
+            if agent_idx not in free:
+                continue
+            self._assign(ledger, tx, agent_idx, step)
+            free.remove(agent_idx)
+
+    def _refresh_recovery_targets(self, step):
+        return
+
+    def _parking_target_for_idx(self, idx):
+        agent = self.env.unwrapped.agents[idx]
+        return (agent.x, agent.y)
+
+    def _nominal_actions(self):
+        actions = [NOOP] * len(self.env.unwrapped.agents)
+        targets = {}
+        occupied = {
+            (agent.x, agent.y)
+            for agent in self.env.unwrapped.agents
+        }
+        for idx, agent in enumerate(self.env.unwrapped.agents):
+            if idx in self.service_until:
+                actions[idx] = NOOP
+                self.stats["holds"] += 1
+                continue
+            target = self._target_for_idx(idx)
+            path = find_path(
+                self.env,
+                (agent.x, agent.y),
+                target,
+                allowed=self._path_allowed_for_target(idx, target),
+                blocked=set(),
+            )
+            action, requested_target = action_towards(agent, path)
+            actions[idx] = action
+            targets[idx] = requested_target
+        self._apply_shared_area_admission(actions, targets)
+        return actions, targets
+
+    def _apply_shared_area_admission(self, actions, targets):
+        candidates_by_area = defaultdict(list)
+        occupants_by_area = defaultdict(set)
+
+        for idx, agent in enumerate(self.env.unwrapped.agents):
+            pos = (agent.x, agent.y)
+            area = self._shared_area_for_cell(pos)
+            if area is not None:
+                occupants_by_area[area].add(idx)
+
+        for idx, action in enumerate(actions):
+            if action == NOOP:
+                continue
+            agent = self.env.unwrapped.agents[idx]
+            pos = (agent.x, agent.y)
+            target = targets.get(idx, pos)
+            direction = self._movement_direction(idx, target)
+            current_area = self._shared_area_for_cell(pos)
+            target_area = self._shared_area_for_cell(target)
+            approach_area = self._approach_area_for_cell(pos, direction)
+            area = current_area or target_area or approach_area
+            if area is None:
+                continue
+            candidates_by_area[area].append(
+                {
+                    "idx": idx,
+                    "pos": pos,
+                    "target": target,
+                    "current_area": current_area,
+                    "target_area": target_area,
+                    "direction": direction,
+                }
+            )
+
+        for area, candidates in candidates_by_area.items():
+            occupants = occupants_by_area.get(area, set())
+            active_ids = occupants | {candidate["idx"] for candidate in candidates}
+            owner = self.area_owner.get(area)
+            if owner is not None and owner not in active_ids:
+                self.area_owner.pop(area, None)
+                owner = None
+
+            self.stats["graph_decisions"] += 1
+            self.stats["max_core_occupancy"] = max(
+                self.stats["max_core_occupancy"],
+                len(occupants),
+            )
+            self.stats["max_queue_length"] = max(
+                self.stats["max_queue_length"],
+                len(candidates),
+            )
+
+            if owner is not None:
+                selectable = [
+                    candidate
+                    for candidate in candidates
+                    if candidate["idx"] == owner
+                ]
+                if not selectable and owner in occupants:
+                    held = 0
+                    for candidate in candidates:
+                        actions[candidate["idx"]] = self._retreat_action(area, candidate) or NOOP
+                        held += 1
+                    self.stats["admission_holds"] += held
+                    continue
+            elif occupants:
+                selectable = [
+                    candidate
+                    for candidate in candidates
+                    if candidate["idx"] in occupants
+                ]
+                if not selectable:
+                    owner = min(occupants)
+                    self.area_owner[area] = owner
+                    held = 0
+                    for candidate in candidates:
+                        actions[candidate["idx"]] = self._retreat_action(area, candidate) or NOOP
+                        held += 1
+                    self.stats["admission_holds"] += held
+                    continue
+            else:
+                selectable = candidates
+
+            if not selectable:
+                for candidate in candidates:
+                    actions[candidate["idx"]] = NOOP
+                self.stats["admission_holds"] += len(candidates)
+                continue
+
+            scores = self._local_graph_scores(area, selectable)
+            winner = max(selectable, key=lambda item: (scores[item["idx"]], -item["idx"]))
+            winner_idx = winner["idx"]
+            self.area_owner[area] = winner_idx
+            held = 0
+            for candidate in candidates:
+                idx = candidate["idx"]
+                if idx == winner_idx:
+                    continue
+                actions[idx] = self._retreat_action(area, candidate) or NOOP
+                held += 1
+            self.stats["admission_holds"] += held
+
+    def _local_graph_scores(self, area, candidates):
+        n = len(candidates)
+        if n == 1:
+            return {candidates[0]["idx"]: self._candidate_base_score(area, candidates[0])}
+
+        features = []
+        for candidate in candidates:
+            others = [other for other in candidates if other is not candidate]
+            wait = self._agent_wait_steps()[candidate["idx"]]
+            inside = 1.0 if candidate["current_area"] == area else 0.0
+            exit_free = 1.0 if self._exit_is_free(area, candidate) else 0.0
+            opposite = sum(
+                1
+                for other in others
+                if self._opposite_direction(other["direction"], candidate["direction"])
+            )
+            same_queue = sum(
+                1
+                for other in others
+                if other["direction"] == candidate["direction"]
+            )
+            distance = manhattan(candidate["pos"], candidate["target"])
+            features.append(
+                [
+                    min(1.0, wait / 20.0),
+                    inside,
+                    exit_free,
+                    min(1.0, opposite / 3.0),
+                    min(1.0, same_queue / 3.0),
+                    1.0 / (1.0 + distance),
+                ]
+            )
+
+        adjacency = [[0.0 for _ in range(n)] for _ in range(n)]
+        for i, left in enumerate(candidates):
+            adjacency[i][i] = 1.0
+            for j, right in enumerate(candidates):
+                if i == j:
+                    continue
+                if self._opposite_direction(left["direction"], right["direction"]):
+                    adjacency[i][j] = 1.4
+                elif left["direction"] == right["direction"]:
+                    adjacency[i][j] = 0.8
+                else:
+                    adjacency[i][j] = 0.4
+        for i, row in enumerate(adjacency):
+            total = sum(row) or 1.0
+            adjacency[i] = [value / total for value in row]
+
+        hidden = [row[:] for row in features]
+        for _ in range(2):
+            next_hidden = []
+            for i in range(n):
+                mixed = [0.0 for _ in hidden[i]]
+                for j in range(n):
+                    weight = adjacency[i][j]
+                    for k, value in enumerate(hidden[j]):
+                        mixed[k] += weight * value
+                next_hidden.append(
+                    [
+                        0.65 * hidden[i][k] + 0.35 * mixed[k]
+                        for k in range(len(hidden[i]))
+                    ]
+                )
+            hidden = next_hidden
+
+        scores = {}
+        for candidate, emb in zip(candidates, hidden):
+            scores[candidate["idx"]] = (
+                2.4 * emb[0]
+                + 3.0 * emb[1]
+                + 1.5 * emb[2]
+                - 1.2 * emb[3]
+                - 0.4 * emb[4]
+                + 0.8 * emb[5]
+            )
+        return scores
+
+    def _candidate_base_score(self, area, candidate):
+        wait = self._agent_wait_steps()[candidate["idx"]]
+        return wait + 2.0 if self._exit_is_free(area, candidate) else wait
+
+    def _shared_area_for_cell(self, cell):
+        for area_id, cells in self.shared_areas.items():
+            if cell in cells:
+                return area_id
+        if self.shared_areas:
+            return None
+
+        x, y = cell
+        if x not in self.points.aisle_columns:
+            return None
+        if self.core_min_y <= y <= self.core_max_y:
+            return x
+        return None
+
+    def _movement_direction(self, idx, requested_target):
+        agent = self.env.unwrapped.agents[idx]
+        if requested_target != (agent.x, agent.y):
+            return (_sign(requested_target[0] - agent.x), _sign(requested_target[1] - agent.y))
+        task_target = self._task_target_for_idx(idx) or requested_target
+        dx = task_target[0] - agent.x
+        dy = task_target[1] - agent.y
+        if abs(dx) >= abs(dy) and dx:
+            return (_sign(dx), 0)
+        if dy:
+            return (0, _sign(dy))
+        return (0, 0)
+
+    def _approach_area_for_cell(self, cell, direction):
+        if direction == (0, 0):
+            return None
+        for distance in (1, 2, 3):
+            nxt = (
+                cell[0] + direction[0] * distance,
+                cell[1] + direction[1] * distance,
+            )
+            area = self._shared_area_for_cell(nxt)
+            if area is not None:
+                return area
+        return None
+
+    def _exit_is_free(self, area, candidate):
+        direction = candidate["direction"]
+        if area in self.shared_areas:
+            cells = self.shared_areas[area]
+            xs = [cell[0] for cell in cells]
+            ys = [cell[1] for cell in cells]
+            x, y = candidate["target"]
+            if direction[0] > 0:
+                exit_cell = (max(xs) + 1, y)
+            elif direction[0] < 0:
+                exit_cell = (min(xs) - 1, y)
+            elif direction[1] > 0:
+                exit_cell = (x, max(ys) + 1)
+            elif direction[1] < 0:
+                exit_cell = (x, min(ys) - 1)
+            else:
+                exit_cell = candidate["target"]
+        elif direction[1] > 0:
+            exit_cell = (area, self.core_max_y + 1)
+        elif direction[1] < 0:
+            exit_cell = (area, self.core_min_y - 1)
+        else:
+            exit_cell = candidate["target"]
+        for idx, agent in enumerate(self.env.unwrapped.agents):
+            if idx == candidate["idx"]:
+                continue
+            if (agent.x, agent.y) == exit_cell:
+                return False
+        return True
+
+    def _opposite_direction(self, left, right):
+        return left != (0, 0) and left[0] == -right[0] and left[1] == -right[1]
+
+    def _retreat_action(self, area, candidate):
+        direction = candidate["direction"]
+        if direction == (0, 0):
+            return None
+        agent = self.env.unwrapped.agents[candidate["idx"]]
+        start = candidate["pos"]
+        target = (start[0] - direction[0], start[1] - direction[1])
+        if not self._retreat_cell_is_open(candidate["idx"], target):
+            return None
+        action, _ = action_towards(agent, [start, target])
+        return action
+
+    def _retreat_cell_is_open(self, idx, cell):
+        x, y = cell
+        if not (0 <= x < self.env.unwrapped.grid_size[1] and 0 <= y < self.env.unwrapped.grid_size[0]):
+            return False
+        if not self.env.unwrapped._is_highway(x, y):
+            return False
+        for other_idx, other in enumerate(self.env.unwrapped.agents):
+            if other_idx == idx:
+                continue
+            if (other.x, other.y) == cell:
+                return False
+        return True
 
 
 class FSDTriggerController(BaseTransactionController):

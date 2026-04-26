@@ -1,0 +1,4 @@
+seed,policy_type,num_robots,num_aisles,capacity,arrival_rate,Favg,Fmax,Throughput,BlockingTime,AvgQueueLength,DeadlockCount,TriggerCount,RerouteCount,CollisionAttempts,ForcedRelocationCount,RobotUtilization,AverageTravelDistance
+0,rule_based,3,6,small,medium,25.833333333333332,63,6,24,0.475,0,0,4,12,0,0.8208333333333333,57.666666666666664
+0,dsd,3,6,small,medium,23.666666666666668,39,6,0,0.8125,0,0,0,0,0,0.6541666666666667,52.333333333333336
+0,fsd,3,6,small,medium,19.2,28,5,24,0.4875,0,0,4,12,0,0.8375,59.0

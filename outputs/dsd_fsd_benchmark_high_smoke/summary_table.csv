@@ -1,0 +1,4 @@
+policy_type,n,Favg_mean,Favg_std,Fmax_mean,Fmax_std,Throughput_mean,Throughput_std,BlockingTime_mean,BlockingTime_std,AvgQueueLength_mean,AvgQueueLength_std,DeadlockCount_mean,DeadlockCount_std,TriggerCount_mean,TriggerCount_std,RerouteCount_mean,RerouteCount_std
+dsd,1,24.869565217391305,0.0,67.0,0.0,23.0,0.0,0.0,0.0,2.46875,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+fsd,1,27.6,0.0,52.0,0.0,20.0,0.0,43.0,0.0,2.15625,0.0,0.0,0.0,22.0,0.0,0.0,0.0
+rule_based,1,31.235294117647058,0.0,85.0,0.0,17.0,0.0,161.0,0.0,3.7,0.0,0.0,0.0,0.0,0.0,26.0,0.0

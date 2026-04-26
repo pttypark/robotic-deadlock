@@ -27,6 +27,9 @@ def run_once(
     stall_threshold=8,
     layout_name="paper",
     workload="uniform",
+    request_line_axis="aisle",
+    request_line_index=None,
+    agent_starts=None,
     render=False,
 ):
     system = SystemType(system)
@@ -40,14 +43,20 @@ def run_once(
         request_queue_size=0,
     )
     env.reset(seed=seed)
-    _stage_agents(env, points, n_agents)
+    _stage_agents(env, points, n_agents, agent_starts=agent_starts)
 
     ledger = TransactionLedger()
     controller = _make_controller(system, env, points, service_steps, stall_threshold)
 
     for step in range(max_steps):
         if step % arrival_interval == 0:
-            target = _sample_target(rng, points, workload)
+            target = _sample_target(
+                rng,
+                points,
+                workload,
+                request_line_axis=request_line_axis,
+                request_line_index=request_line_index,
+            )
             kind = _sample_kind(rng)
             ledger.create(
                 target=target,
@@ -79,6 +88,9 @@ def run_comparison(
     stall_threshold=8,
     layout_name="paper",
     workload="uniform",
+    request_line_axis="aisle",
+    request_line_index=None,
+    agent_starts=None,
 ):
     return {
         "dsd": run_once(
@@ -90,6 +102,9 @@ def run_comparison(
             stall_threshold=stall_threshold,
             layout_name=layout_name,
             workload=workload,
+            request_line_axis=request_line_axis,
+            request_line_index=request_line_index,
+            agent_starts=agent_starts,
         ),
         "fsd": run_once(
             SystemType.FSD,
@@ -100,6 +115,9 @@ def run_comparison(
             stall_threshold=stall_threshold,
             layout_name=layout_name,
             workload=workload,
+            request_line_axis=request_line_axis,
+            request_line_index=request_line_index,
+            agent_starts=agent_starts,
         ),
     }
 
@@ -126,24 +144,59 @@ def _make_controller(system, env, points, service_steps, stall_threshold):
     )
 
 
-def _sample_target(rng, points, workload):
-    candidates = _target_candidates(points, workload)
+def _sample_target(
+    rng,
+    points,
+    workload,
+    request_line_axis="aisle",
+    request_line_index=None,
+):
+    candidates = _target_candidates(
+        points,
+        workload,
+        request_line_axis=request_line_axis,
+        request_line_index=request_line_index,
+    )
     idx = int(rng.integers(0, len(candidates)))
     return candidates[idx]
 
 
-def _target_candidates(points, workload):
-    if workload != "hotspot":
+def _target_candidates(
+    points,
+    workload,
+    request_line_axis="aisle",
+    request_line_index=None,
+):
+    if workload == "uniform":
         return points.storage_points
 
-    middle = len(points.aisle_columns) // 2
-    hot_aisles = set(points.aisle_columns[middle:middle + 2])
-    candidates = [
-        point
-        for point in points.storage_points
-        if point[0] in hot_aisles
-    ]
+    if workload == "hotspot":
+        middle = len(points.aisle_columns) // 2
+        hot_aisles = set(points.aisle_columns[middle:middle + 2])
+        candidates = [
+            point
+            for point in points.storage_points
+            if point[0] in hot_aisles
+        ]
+        return candidates or points.storage_points
+
+    if request_line_axis == "row":
+        rows = sorted({point[1] for point in points.storage_points})
+        row = _select_line_value(rows, request_line_index)
+        candidates = [point for point in points.storage_points if point[1] == row]
+    else:
+        aisle = _select_line_value(points.aisle_columns, request_line_index)
+        candidates = [point for point in points.storage_points if point[0] == aisle]
     return candidates or points.storage_points
+
+
+def _select_line_value(values, requested):
+    if requested is None:
+        return values[len(values) // 2]
+    if requested in values:
+        return requested
+    idx = max(0, min(len(values) - 1, int(requested)))
+    return values[idx]
 
 
 def _sample_kind(rng):
@@ -152,8 +205,8 @@ def _sample_kind(rng):
     return TransactionKind.RETRIEVAL
 
 
-def _stage_agents(env, points, n_agents):
-    starts = _start_positions(points, n_agents)
+def _stage_agents(env, points, n_agents, agent_starts=None):
+    starts = _normalise_agent_starts(agent_starts, points, n_agents)
     for agent, (x, y, direction) in zip(env.unwrapped.agents, starts):
         agent.x = x
         agent.y = y
@@ -164,6 +217,17 @@ def _stage_agents(env, points, n_agents):
     env.unwrapped.request_queue = []
     env.unwrapped._agent_wait_steps[:] = 0
     env.unwrapped._position_history.clear()
+
+
+def _normalise_agent_starts(agent_starts, points, n_agents):
+    auto_starts = _start_positions(points, n_agents)
+    if not agent_starts:
+        return auto_starts
+
+    starts = list(agent_starts[:n_agents])
+    if len(starts) < n_agents:
+        starts.extend(auto_starts[len(starts):])
+    return starts
 
 
 def _record_health_metrics(env, controller):
@@ -239,13 +303,26 @@ def parse_args():
     parser.add_argument("--arrival-interval", type=int, default=5)
     parser.add_argument("--stall-threshold", type=int, default=8)
     parser.add_argument("--layout", choices=["paper", "baseline"], default="paper")
-    parser.add_argument("--workload", choices=["uniform", "hotspot"], default="uniform")
+    parser.add_argument("--workload", choices=["uniform", "hotspot", "line"], default="uniform")
+    parser.add_argument("--request-line-axis", choices=["aisle", "row"], default="aisle")
+    parser.add_argument(
+        "--request-line-index",
+        type=int,
+        default=None,
+        help="Line index or actual x/y coordinate used when --workload line is selected.",
+    )
+    parser.add_argument(
+        "--agent-starts",
+        default=None,
+        help="Optional starts as 'x,y,DIR;x,y,DIR'. Missing agents use automatic starts.",
+    )
     parser.add_argument("--render", action="store_true")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    agent_starts = _parse_agent_starts(args.agent_starts)
     if args.system == "both":
         result = run_comparison(
             seed=args.seed,
@@ -255,6 +332,9 @@ def main():
             stall_threshold=args.stall_threshold,
             layout_name=args.layout,
             workload=args.workload,
+            request_line_axis=args.request_line_axis,
+            request_line_index=args.request_line_index,
+            agent_starts=agent_starts,
         )
     else:
         result = run_once(
@@ -266,9 +346,31 @@ def main():
             stall_threshold=args.stall_threshold,
             layout_name=args.layout,
             workload=args.workload,
+            request_line_axis=args.request_line_axis,
+            request_line_index=args.request_line_index,
+            agent_starts=agent_starts,
             render=args.render,
         )
     print(json.dumps(result, indent=2, sort_keys=True))
+
+
+def _parse_agent_starts(raw):
+    if not raw:
+        return None
+
+    starts = []
+    for item in raw.split(";"):
+        item = item.strip()
+        if not item:
+            continue
+        parts = [part.strip() for part in item.split(",")]
+        if len(parts) not in {2, 3}:
+            raise ValueError("--agent-starts must use 'x,y,DIR;x,y,DIR'")
+        direction = parts[2].upper() if len(parts) == 3 else "DOWN"
+        if direction not in {"UP", "DOWN", "LEFT", "RIGHT"}:
+            raise ValueError(f"Unknown direction in --agent-starts: {direction}")
+        starts.append((int(parts[0]), int(parts[1]), direction))
+    return starts or None
 
 
 if __name__ == "__main__":

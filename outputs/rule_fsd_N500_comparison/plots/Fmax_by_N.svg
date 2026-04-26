@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="420" viewBox="0 0 720 420">
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="360.0" y="28" text-anchor="middle" font-family="Arial" font-size="18" font-weight="700">Fmax by N</text>
+<line x1="76" y1="348" x2="692" y2="348" stroke="#222"/>
+<line x1="76" y1="52" x2="76" y2="348" stroke="#222"/>
+<line x1="72" y1="348.0" x2="76" y2="348.0" stroke="#222"/>
+<text x="68" y="352.0" text-anchor="end" font-family="Arial" font-size="11">0.0</text>
+<line x1="72" y1="274.0" x2="76" y2="274.0" stroke="#222"/>
+<text x="68" y="278.0" text-anchor="end" font-family="Arial" font-size="11">67.5</text>
+<line x1="76" y1="274.0" x2="692" y2="274.0" stroke="#e5e5e5"/>
+<line x1="72" y1="200.0" x2="76" y2="200.0" stroke="#222"/>
+<text x="68" y="204.0" text-anchor="end" font-family="Arial" font-size="11">134.9</text>
+<line x1="76" y1="200.0" x2="692" y2="200.0" stroke="#e5e5e5"/>
+<line x1="72" y1="126.0" x2="76" y2="126.0" stroke="#222"/>
+<text x="68" y="130.0" text-anchor="end" font-family="Arial" font-size="11">202.4</text>
+<line x1="76" y1="126.0" x2="692" y2="126.0" stroke="#e5e5e5"/>
+<line x1="72" y1="52.0" x2="76" y2="52.0" stroke="#222"/>
+<text x="68" y="56.0" text-anchor="end" font-family="Arial" font-size="11">269.8</text>
+<line x1="76" y1="52.0" x2="692" y2="52.0" stroke="#e5e5e5"/>
+<text x="178.7" y="378" text-anchor="middle" font-family="Arial" font-size="13">N=3</text>
+<rect x="105.2" y="126.1" width="68.4" height="221.9" fill="#f58518"/>
+<text x="139.4" y="121.1" text-anchor="middle" font-family="Arial" font-size="10">202.2</text>
+<rect x="183.7" y="90.6" width="68.4" height="257.4" fill="#54a24b"/>
+<text x="217.9" y="85.6" text-anchor="middle" font-family="Arial" font-size="10">234.6</text>
+<text x="384.0" y="378" text-anchor="middle" font-family="Arial" font-size="13">N=4</text>
+<rect x="310.6" y="149.1" width="68.4" height="198.9" fill="#f58518"/>
+<text x="344.8" y="144.1" text-anchor="middle" font-family="Arial" font-size="10">181.3</text>
+<rect x="389.0" y="145.2" width="68.4" height="202.8" fill="#54a24b"/>
+<text x="423.2" y="140.2" text-anchor="middle" font-family="Arial" font-size="10">184.9</text>
+<text x="589.3" y="378" text-anchor="middle" font-family="Arial" font-size="13">N=5</text>
+<rect x="515.9" y="158.6" width="68.4" height="189.4" fill="#f58518"/>
+<text x="550.1" y="153.6" text-anchor="middle" font-family="Arial" font-size="10">172.6</text>
+<rect x="594.3" y="167.2" width="68.4" height="180.8" fill="#54a24b"/>
+<text x="628.6" y="162.2" text-anchor="middle" font-family="Arial" font-size="10">164.8</text>
+<rect x="520" y="54" width="14" height="14" fill="#f58518"/>
+<text x="540" y="66" font-family="Arial" font-size="12">rule_based</text>
+<rect x="520" y="76" width="14" height="14" fill="#54a24b"/>
+<text x="540" y="88" font-family="Arial" font-size="12">fsd</text>
+</svg>
