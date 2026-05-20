@@ -147,21 +147,35 @@ def build_four_way_intersection_layout() -> AGVLayout:
     return build_graph_rware_intersection_v1()
 
 
-def build_fcfs_cross_shared_area_layout() -> AGVLayout:
+def build_fcfs_cross_shared_area_layout(
+    corridor_length: int = 5,
+    west_exit_extension: int = 0,
+) -> AGVLayout:
     """Build the 12-AMR FCFS cross-shaped shared-area experiment layout.
 
     Args:
-        None.
+        corridor_length: Number of lane cells from each outer start to the
+            shared 2x2 conflict zone. The historical layout uses 5.
+        west_exit_extension: Extra outbound cells after the west exit. This
+            creates an asymmetric downstream tail used by the showcase scenario.
 
     Returns:
         AGVLayout with four starts, four exits, one 2x2 conflict zone, and
         straight A* routes through the shared area.
     """
 
-    grid_size = (13, 13)
+    if corridor_length < 5:
+        raise ValueError("corridor_length must be at least 5")
+    if west_exit_extension < 0:
+        raise ValueError("west_exit_extension must be non-negative")
+
+    grid_size = (
+        2 * corridor_length + 3,
+        2 * corridor_length + 3 + west_exit_extension,
+    )
     graph = LaneGraph()
-    roads = _fcfs_cross_road_cells()
-    special = _fcfs_cross_special_nodes()
+    roads = _fcfs_cross_road_cells(corridor_length, west_exit_extension)
+    special = _fcfs_cross_special_nodes(corridor_length, west_exit_extension)
 
     for row, col in sorted(roads):
         node_id, node_type, area_id = special.get(
@@ -222,7 +236,7 @@ def build_fcfs_cross_shared_area_layout() -> AGVLayout:
     )
 
     return AGVLayout(
-        name="fcfs_cross_shared_area_v1",
+        name=_fcfs_cross_layout_name(corridor_length, west_exit_extension),
         grid_size=grid_size,
         graph=graph,
         interaction_areas=[area],
@@ -875,35 +889,68 @@ def _warehouse_to_rware_layout(
     return "\n".join("".join(row) for row in rows)
 
 
-def _fcfs_cross_road_cells() -> set[tuple[int, int]]:
-    roads = {(row, col) for row in range(13) for col in (5, 6)}
-    roads.update((row, col) for row in (5, 6) for col in range(13))
+def _fcfs_cross_layout_name(corridor_length: int, west_exit_extension: int) -> str:
+    if corridor_length == 5 and west_exit_extension == 0:
+        return "fcfs_cross_shared_area_v1"
+    name = f"fcfs_cross_shared_area_corridor{corridor_length}"
+    if west_exit_extension:
+        name += f"_westtail{west_exit_extension}"
+    return name
+
+
+def _fcfs_cross_road_cells(
+    corridor_length: int = 5,
+    west_exit_extension: int = 0,
+) -> set[tuple[int, int]]:
+    rows = 2 * corridor_length + 3
+    cols = rows + west_exit_extension
+    center_row = corridor_length
+    center_col = corridor_length + west_exit_extension
+    roads = {
+        (row, col)
+        for row in range(rows)
+        for col in (center_col, center_col + 1)
+    }
+    roads.update(
+        (row, col)
+        for row in (center_row, center_row + 1)
+        for col in range(cols)
+    )
     return roads
 
 
-def _fcfs_cross_special_nodes() -> dict[tuple[int, int], tuple[str, str, str | None]]:
+def _fcfs_cross_special_nodes(
+    corridor_length: int = 5,
+    west_exit_extension: int = 0,
+) -> dict[tuple[int, int], tuple[str, str, str | None]]:
     area_id = "IA_CROSS_FCFS_001"
+    rows = 2 * corridor_length + 3
+    cols = rows + west_exit_extension
+    last_row = rows - 1
+    last_col = cols - 1
+    center_row = corridor_length
+    center_col = corridor_length + west_exit_extension
     return {
-        (0, 5): ("N_START", "station", None),
-        (0, 6): ("N_EXIT", "station", None),
-        (12, 6): ("S_START", "station", None),
-        (12, 5): ("S_EXIT", "station", None),
-        (6, 0): ("W_START", "station", None),
-        (5, 0): ("W_EXIT", "station", None),
-        (5, 12): ("E_START", "station", None),
-        (6, 12): ("E_EXIT", "station", None),
-        (3, 5): ("N_PRE_WAIT", "attention", area_id),
-        (4, 5): ("N_WAIT", "waiting", area_id),
-        (9, 6): ("S_PRE_WAIT", "attention", area_id),
-        (7, 6): ("S_WAIT", "waiting", area_id),
-        (6, 3): ("W_PRE_WAIT", "attention", area_id),
-        (6, 4): ("W_WAIT", "waiting", area_id),
-        (5, 9): ("E_PRE_WAIT", "attention", area_id),
-        (5, 7): ("E_WAIT", "waiting", area_id),
-        (5, 5): ("CP_NW", "conflict", area_id),
-        (5, 6): ("CP_NE", "conflict", area_id),
-        (6, 5): ("CP_SW", "conflict", area_id),
-        (6, 6): ("CP_SE", "conflict", area_id),
+        (0, center_col): ("N_START", "station", None),
+        (0, center_col + 1): ("N_EXIT", "station", None),
+        (last_row, center_col + 1): ("S_START", "station", None),
+        (last_row, center_col): ("S_EXIT", "station", None),
+        (center_row + 1, west_exit_extension): ("W_START", "station", None),
+        (center_row, 0): ("W_EXIT", "station", None),
+        (center_row, last_col): ("E_START", "station", None),
+        (center_row + 1, last_col): ("E_EXIT", "station", None),
+        (center_row - 2, center_col): ("N_PRE_WAIT", "attention", area_id),
+        (center_row - 1, center_col): ("N_WAIT", "waiting", area_id),
+        (center_row + 4, center_col + 1): ("S_PRE_WAIT", "attention", area_id),
+        (center_row + 2, center_col + 1): ("S_WAIT", "waiting", area_id),
+        (center_row + 1, center_col - 2): ("W_PRE_WAIT", "attention", area_id),
+        (center_row + 1, center_col - 1): ("W_WAIT", "waiting", area_id),
+        (center_row, center_col + 4): ("E_PRE_WAIT", "attention", area_id),
+        (center_row, center_col + 2): ("E_WAIT", "waiting", area_id),
+        (center_row, center_col): ("CP_NW", "conflict", area_id),
+        (center_row, center_col + 1): ("CP_NE", "conflict", area_id),
+        (center_row + 1, center_col): ("CP_SW", "conflict", area_id),
+        (center_row + 1, center_col + 1): ("CP_SE", "conflict", area_id),
     }
 
 

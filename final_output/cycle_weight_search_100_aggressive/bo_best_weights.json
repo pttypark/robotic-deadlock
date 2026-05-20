@@ -1,0 +1,106 @@
+{
+  "best_bo_training_avg_total_time": 49.66,
+  "best_bo_weights": {
+    "approach_queue": 1.9345608041929463,
+    "exit_competition": 1.4539463213853687,
+    "maneuver": -1.7823979392556368,
+    "path_conflict": -0.8894222882728342,
+    "remaining_path": 0.0,
+    "same_direction_backlog": 0.0,
+    "waiting": 2.376361971663026
+  },
+  "bo_exploration_mode": "aggressive",
+  "bo_global_ratio": 1.0,
+  "bo_kappa": 3.0,
+  "bo_local_scale_ratio": 0.3,
+  "bo_prior_weight_candidates": [
+    {
+      "approach_queue": -1.5,
+      "exit_competition": 0.0,
+      "maneuver": -1.0,
+      "path_conflict": 1.5,
+      "remaining_path": 0.0,
+      "same_direction_backlog": 0.0,
+      "waiting": 1.0
+    },
+    {
+      "approach_queue": -2.0,
+      "exit_competition": -1.5,
+      "maneuver": 1.6,
+      "path_conflict": 0.5,
+      "remaining_path": 0.0,
+      "same_direction_backlog": 0.0,
+      "waiting": 0.4
+    },
+    {
+      "approach_queue": 0.0,
+      "exit_competition": 1.8,
+      "maneuver": -0.6,
+      "path_conflict": 2.4,
+      "remaining_path": 0.0,
+      "same_direction_backlog": 0.0,
+      "waiting": 1.8
+    },
+    {
+      "approach_queue": -2.2,
+      "exit_competition": 0.0,
+      "maneuver": 0.0,
+      "path_conflict": 2.8,
+      "remaining_path": 0.0,
+      "same_direction_backlog": 0.0,
+      "waiting": 0.0
+    }
+  ],
+  "bo_training_cycle_scenario_count": 100,
+  "bo_trials": 50,
+  "bounds": {
+    "approach_queue": [
+      -2.5,
+      2.0
+    ],
+    "exit_competition": [
+      -2.5,
+      2.5
+    ],
+    "maneuver": [
+      -2.0,
+      2.0
+    ],
+    "path_conflict": [
+      -1.0,
+      3.0
+    ],
+    "waiting": [
+      0.0,
+      2.5
+    ]
+  },
+  "features": [
+    "waiting",
+    "maneuver",
+    "exit_competition",
+    "path_conflict",
+    "approach_queue"
+  ],
+  "fixed_greedy_best_avg_total_time": 49.95,
+  "fixed_greedy_best_weights": {
+    "approach_queue": 0.0,
+    "exit_competition": 1.2,
+    "maneuver": 0.0,
+    "path_conflict": 2.4,
+    "remaining_path": 0.0,
+    "same_direction_backlog": 0.0,
+    "waiting": 1.8
+  },
+  "fixed_heuristic_anchor_weights": {
+    "approach_queue": 0.7,
+    "exit_competition": 1.2,
+    "maneuver": 0.8,
+    "path_conflict": 1.5,
+    "remaining_path": 0.0,
+    "same_direction_backlog": 0.0,
+    "waiting": 1.0
+  },
+  "fixed_weight_set_count": 50,
+  "shared_area_capacity": 2
+}
