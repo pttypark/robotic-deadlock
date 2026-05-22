@@ -6,7 +6,7 @@ from rware.agv_types import InteractionArea
 
 
 class InteractionAreaRegistry:
-    """Lookup helper for communication, attention, waiting, and conflict zones."""
+    """Lookup helper for communication, waiting, and conflict zones."""
 
     def __init__(self, areas: list[InteractionArea]) -> None:
         """Create a registry from interaction-area definitions."""
@@ -35,7 +35,6 @@ class InteractionAreaRegistry:
         return (
             node_id in area.communication_zone_nodes
             or node_id in area.conflict_zone_nodes
-            or node_id in area.attention_points
             or node_id in area.waiting_points
             or node_id in area.conflict_points
         )
@@ -47,11 +46,6 @@ class InteractionAreaRegistry:
             if node_id in area.conflict_zone_nodes or node_id in area.conflict_points:
                 return area
         return None
-
-    def is_attention_point(self, node_id: str) -> bool:
-        """Return whether the node is an Attention Point."""
-
-        return any(node_id in area.attention_points for area in self.areas.values())
 
     def is_waiting_point(self, node_id: str) -> bool:
         """Return whether the node is a Waiting Point."""
@@ -70,7 +64,6 @@ class InteractionAreaRegistry:
             {
                 "area_id": area.area_id,
                 "area_type": area.area_type,
-                "attention_points": sorted(area.attention_points),
                 "waiting_points": sorted(area.waiting_points),
                 "conflict_points": sorted(area.conflict_points),
                 "routes": sorted(area.allowed_routes),

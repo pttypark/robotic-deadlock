@@ -199,6 +199,8 @@ def build_fcfs_cross_shared_area_layout(
             if target_pos not in graph.position_to_node:
                 continue
             target_id = graph.position_to_node[target_pos]
+            if not _is_allowed_fcfs_conflict_edge(graph, node.node_id, target_id):
+                continue
             edge_id = f"{node.node_id}->{target_id}"
             if edge_id not in graph.edges:
                 graph.add_adjacent_edge(
@@ -213,18 +215,8 @@ def build_fcfs_cross_shared_area_layout(
     area = InteractionArea(
         area_id="IA_CROSS_FCFS_001",
         area_type="intersection",
-        communication_zone_nodes={
-            "N_PRE_WAIT",
-            "N_WAIT",
-            "S_PRE_WAIT",
-            "S_WAIT",
-            "W_PRE_WAIT",
-            "W_WAIT",
-            "E_PRE_WAIT",
-            "E_WAIT",
-        },
+        communication_zone_nodes={"N_WAIT", "S_WAIT", "W_WAIT", "E_WAIT"},
         conflict_zone_nodes={"CP_NW", "CP_NE", "CP_SW", "CP_SE"},
-        attention_points={"N_PRE_WAIT", "S_PRE_WAIT", "W_PRE_WAIT", "E_PRE_WAIT"},
         waiting_points={"N_WAIT", "S_WAIT", "W_WAIT", "E_WAIT"},
         conflict_points={"CP_NW", "CP_NE", "CP_SW", "CP_SE"},
         allowed_routes=routes,
@@ -377,10 +369,10 @@ def _special_nodes() -> dict[tuple[int, int], tuple[str, str, str | None]]:
         (16, 8): ("STATION_SOUTH", "station", None),
         (8, 0): ("STATION_WEST", "station", None),
         (8, 16): ("STATION_EAST", "station", None),
-        (4, 8): ("AP_NORTH", "attention", "IA_CROSS_001"),
-        (12, 8): ("AP_SOUTH", "attention", "IA_CROSS_001"),
-        (8, 4): ("AP_WEST", "attention", "IA_CROSS_001"),
-        (8, 12): ("AP_EAST", "attention", "IA_CROSS_001"),
+        (4, 8): ("COMM_NORTH", "normal_lane", "IA_CROSS_001"),
+        (12, 8): ("COMM_SOUTH", "normal_lane", "IA_CROSS_001"),
+        (8, 4): ("COMM_WEST", "normal_lane", "IA_CROSS_001"),
+        (8, 12): ("COMM_EAST", "normal_lane", "IA_CROSS_001"),
         (6, 8): ("WP_NORTH", "waiting", "IA_CROSS_001"),
         (10, 8): ("WP_SOUTH", "waiting", "IA_CROSS_001"),
         (8, 6): ("WP_WEST", "waiting", "IA_CROSS_001"),
@@ -394,17 +386,17 @@ def _special_nodes() -> dict[tuple[int, int], tuple[str, str, str | None]]:
         (9, 7): ("CP_7", "conflict", "IA_CROSS_001"),
         (9, 8): ("CP_8", "conflict", "IA_CROSS_001"),
         (9, 9): ("CP_9", "conflict", "IA_CROSS_001"),
-        (4, 1): ("BN_AP_WEST", "attention", "IA_BOTTLENECK_001"),
+        (4, 1): ("BN_COMM_WEST", "normal_lane", "IA_BOTTLENECK_001"),
         (4, 2): ("BN_WP_WEST", "waiting", "IA_BOTTLENECK_001"),
         (4, 3): ("BN_CP", "bottleneck", "IA_BOTTLENECK_001"),
         (4, 4): ("BN_WP_EAST", "waiting", "IA_BOTTLENECK_001"),
-        (4, 5): ("BN_AP_EAST", "attention", "IA_BOTTLENECK_001"),
-        (12, 2): ("MERGE_AP_LEFT", "attention", "IA_MERGE_001"),
+        (4, 5): ("BN_COMM_EAST", "normal_lane", "IA_BOTTLENECK_001"),
+        (12, 2): ("MERGE_COMM_LEFT", "normal_lane", "IA_MERGE_001"),
         (12, 3): ("MERGE_WP_LEFT", "waiting", "IA_MERGE_001"),
-        (14, 2): ("MERGE_AP_RIGHT", "attention", "IA_MERGE_001"),
+        (14, 2): ("MERGE_COMM_RIGHT", "normal_lane", "IA_MERGE_001"),
         (14, 3): ("MERGE_WP_RIGHT", "waiting", "IA_MERGE_001"),
         (13, 4): ("MERGE_CP", "merge", "IA_MERGE_001"),
-        (2, 12): ("TURN_AP", "attention", "IA_TURN_001"),
+        (2, 12): ("TURN_COMM", "normal_lane", "IA_TURN_001"),
         (2, 13): ("TURN_WP", "waiting", "IA_TURN_001"),
         (2, 14): ("TURN_CP", "turn", "IA_TURN_001"),
     }
@@ -573,7 +565,7 @@ def _positions_for_route(route: Route) -> list[tuple[int, int]]:
 
 def _allowed_turns(node_type: str) -> list[str]:
     actions = [AGVAction.FORWARD.value, AGVAction.WAIT.value]
-    if node_type in {"intersection", "turn", "attention", "waiting", "conflict", "shelf_access", "station"}:
+    if node_type in {"intersection", "turn", "waiting", "conflict", "shelf_access", "station"}:
         actions.extend([AGVAction.TURN_LEFT.value, AGVAction.TURN_RIGHT.value])
     return actions
 
@@ -598,20 +590,20 @@ def _edge_type(left_type: str, right_type: str) -> str:
 def _cross_interaction_area(routes: dict[str, Route]) -> InteractionArea:
     communication = {
         "N_03_08",
-        "AP_NORTH",
+        "COMM_NORTH",
         "N_05_08",
         "WP_NORTH",
         "WP_SOUTH",
         "N_11_08",
-        "AP_SOUTH",
+        "COMM_SOUTH",
         "N_13_08",
         "N_08_03",
-        "AP_WEST",
+        "COMM_WEST",
         "N_08_05",
         "WP_WEST",
         "WP_EAST",
         "N_08_11",
-        "AP_EAST",
+        "COMM_EAST",
         "N_08_13",
     }
     conflict_points = {f"CP_{idx}" for idx in range(1, 10)}
@@ -639,7 +631,6 @@ def _cross_interaction_area(routes: dict[str, Route]) -> InteractionArea:
         area_type="intersection",
         communication_zone_nodes=communication,
         conflict_zone_nodes=conflict_points,
-        attention_points={"AP_NORTH", "AP_SOUTH", "AP_WEST", "AP_EAST"},
         waiting_points={"WP_NORTH", "WP_SOUTH", "WP_WEST", "WP_EAST"},
         conflict_points=conflict_points,
         allowed_routes=cross_routes,
@@ -651,9 +642,8 @@ def _bottleneck_interaction_area(routes: dict[str, Route]) -> InteractionArea:
     return InteractionArea(
         area_id="IA_BOTTLENECK_001",
         area_type="bottleneck",
-        communication_zone_nodes={"BN_AP_WEST", "BN_WP_WEST", "BN_WP_EAST", "BN_AP_EAST"},
+        communication_zone_nodes={"BN_COMM_WEST", "BN_WP_WEST", "BN_WP_EAST", "BN_COMM_EAST"},
         conflict_zone_nodes={"BN_CP"},
-        attention_points={"BN_AP_WEST", "BN_AP_EAST"},
         waiting_points={"BN_WP_WEST", "BN_WP_EAST"},
         conflict_points={"BN_CP"},
         allowed_routes={
@@ -668,15 +658,14 @@ def _merge_interaction_area(routes: dict[str, Route]) -> InteractionArea:
         area_id="IA_MERGE_001",
         area_type="merge",
         communication_zone_nodes={
-            "MERGE_AP_LEFT",
+            "MERGE_COMM_LEFT",
             "MERGE_WP_LEFT",
             "N_12_04",
-            "MERGE_AP_RIGHT",
+            "MERGE_COMM_RIGHT",
             "MERGE_WP_RIGHT",
             "N_14_04",
         },
         conflict_zone_nodes={"MERGE_CP"},
-        attention_points={"MERGE_AP_LEFT", "MERGE_AP_RIGHT"},
         waiting_points={"MERGE_WP_LEFT", "MERGE_WP_RIGHT"},
         conflict_points={"MERGE_CP"},
         allowed_routes={
@@ -690,9 +679,8 @@ def _turn_interaction_area(routes: dict[str, Route]) -> InteractionArea:
     return InteractionArea(
         area_id="IA_TURN_001",
         area_type="turn",
-        communication_zone_nodes={"TURN_AP", "TURN_WP", "TURN_CP", "N_03_14"},
+        communication_zone_nodes={"TURN_COMM", "TURN_WP", "TURN_CP", "N_03_14"},
         conflict_zone_nodes={"TURN_CP"},
-        attention_points={"TURN_AP"},
         waiting_points={"TURN_WP"},
         conflict_points={"TURN_CP"},
         allowed_routes={
@@ -748,10 +736,10 @@ def _warehouse_default_node_type(row: int, col: int) -> str:
 
 def _warehouse_special_positions() -> dict[tuple[int, int], tuple[str, str, str | None]]:
     return {
-        (4, 14): ("AP_NORTH", "attention", "IA_CROSS_001"),
-        (12, 14): ("AP_SOUTH", "attention", "IA_CROSS_001"),
-        (8, 8): ("AP_WEST", "attention", "IA_CROSS_001"),
-        (8, 20): ("AP_EAST", "attention", "IA_CROSS_001"),
+        (4, 14): ("COMM_NORTH", "normal_lane", "IA_CROSS_001"),
+        (12, 14): ("COMM_SOUTH", "normal_lane", "IA_CROSS_001"),
+        (8, 8): ("COMM_WEST", "normal_lane", "IA_CROSS_001"),
+        (8, 20): ("COMM_EAST", "normal_lane", "IA_CROSS_001"),
         (6, 14): ("WP_NORTH", "waiting", "IA_CROSS_001"),
         (10, 14): ("WP_SOUTH", "waiting", "IA_CROSS_001"),
         (8, 12): ("WP_WEST", "waiting", "IA_CROSS_001"),
@@ -765,17 +753,17 @@ def _warehouse_special_positions() -> dict[tuple[int, int], tuple[str, str, str 
         (9, 13): ("CP_7", "conflict", "IA_CROSS_001"),
         (9, 14): ("CP_8", "conflict", "IA_CROSS_001"),
         (9, 15): ("CP_9", "conflict", "IA_CROSS_001"),
-        (6, 18): ("BN_AP_WEST", "attention", "IA_BOTTLENECK_001"),
+        (6, 18): ("BN_COMM_WEST", "normal_lane", "IA_BOTTLENECK_001"),
         (6, 19): ("BN_WP_WEST", "waiting", "IA_BOTTLENECK_001"),
         (6, 20): ("BN_CP", "bottleneck", "IA_BOTTLENECK_001"),
         (6, 21): ("BN_WP_EAST", "waiting", "IA_BOTTLENECK_001"),
-        (6, 22): ("BN_AP_EAST", "attention", "IA_BOTTLENECK_001"),
-        (13, 3): ("MERGE_AP_LEFT", "attention", "IA_MERGE_001"),
+        (6, 22): ("BN_COMM_EAST", "normal_lane", "IA_BOTTLENECK_001"),
+        (13, 3): ("MERGE_COMM_LEFT", "normal_lane", "IA_MERGE_001"),
         (14, 4): ("MERGE_WP_LEFT", "waiting", "IA_MERGE_001"),
-        (13, 9): ("MERGE_AP_RIGHT", "attention", "IA_MERGE_001"),
+        (13, 9): ("MERGE_COMM_RIGHT", "normal_lane", "IA_MERGE_001"),
         (14, 8): ("MERGE_WP_RIGHT", "waiting", "IA_MERGE_001"),
         (16, 6): ("MERGE_CP", "merge", "IA_MERGE_001"),
-        (2, 22): ("TURN_AP", "attention", "IA_TURN_001"),
+        (2, 22): ("TURN_COMM", "normal_lane", "IA_TURN_001"),
         (2, 23): ("TURN_WP", "waiting", "IA_TURN_001"),
         (2, 24): ("TURN_CP", "turn", "IA_TURN_001"),
     }
@@ -805,13 +793,13 @@ def _enable_turns_at_junctions(graph: LaneGraph) -> None:
 
 def _warehouse_cross_area() -> InteractionArea:
     communication = {
-        "AP_NORTH",
+        "COMM_NORTH",
         "W_05_14",
         "WP_NORTH",
         "WP_SOUTH",
         "W_11_14",
-        "AP_SOUTH",
-        "AP_WEST",
+        "COMM_SOUTH",
+        "COMM_WEST",
         "W_08_09",
         "W_08_10",
         "W_08_11",
@@ -820,7 +808,7 @@ def _warehouse_cross_area() -> InteractionArea:
         "W_08_17",
         "W_08_18",
         "W_08_19",
-        "AP_EAST",
+        "COMM_EAST",
     }
     conflict_points = {f"CP_{idx}" for idx in range(1, 10)}
     return InteractionArea(
@@ -828,7 +816,6 @@ def _warehouse_cross_area() -> InteractionArea:
         area_type="intersection",
         communication_zone_nodes=communication,
         conflict_zone_nodes=conflict_points,
-        attention_points={"AP_NORTH", "AP_SOUTH", "AP_WEST", "AP_EAST"},
         waiting_points={"WP_NORTH", "WP_SOUTH", "WP_WEST", "WP_EAST"},
         conflict_points=conflict_points,
         allowed_routes={},
@@ -840,9 +827,8 @@ def _warehouse_bottleneck_area() -> InteractionArea:
     return InteractionArea(
         area_id="IA_BOTTLENECK_001",
         area_type="bottleneck",
-        communication_zone_nodes={"BN_AP_WEST", "BN_WP_WEST", "BN_WP_EAST", "BN_AP_EAST"},
+        communication_zone_nodes={"BN_COMM_WEST", "BN_WP_WEST", "BN_WP_EAST", "BN_COMM_EAST"},
         conflict_zone_nodes={"BN_CP"},
-        attention_points={"BN_AP_WEST", "BN_AP_EAST"},
         waiting_points={"BN_WP_WEST", "BN_WP_EAST"},
         conflict_points={"BN_CP"},
         allowed_routes={},
@@ -853,9 +839,8 @@ def _warehouse_merge_area() -> InteractionArea:
     return InteractionArea(
         area_id="IA_MERGE_001",
         area_type="merge",
-        communication_zone_nodes={"MERGE_AP_LEFT", "MERGE_WP_LEFT", "MERGE_AP_RIGHT", "MERGE_WP_RIGHT"},
+        communication_zone_nodes={"MERGE_COMM_LEFT", "MERGE_WP_LEFT", "MERGE_COMM_RIGHT", "MERGE_WP_RIGHT"},
         conflict_zone_nodes={"MERGE_CP"},
-        attention_points={"MERGE_AP_LEFT", "MERGE_AP_RIGHT"},
         waiting_points={"MERGE_WP_LEFT", "MERGE_WP_RIGHT"},
         conflict_points={"MERGE_CP"},
         allowed_routes={},
@@ -866,9 +851,8 @@ def _warehouse_turn_area() -> InteractionArea:
     return InteractionArea(
         area_id="IA_TURN_001",
         area_type="turn",
-        communication_zone_nodes={"TURN_AP", "TURN_WP", "TURN_CP", "W_03_24"},
+        communication_zone_nodes={"TURN_COMM", "TURN_WP", "TURN_CP", "W_03_24"},
         conflict_zone_nodes={"TURN_CP"},
-        attention_points={"TURN_AP"},
         waiting_points={"TURN_WP"},
         conflict_points={"TURN_CP"},
         allowed_routes={},
@@ -939,13 +923,13 @@ def _fcfs_cross_special_nodes(
         (center_row, 0): ("W_EXIT", "station", None),
         (center_row, last_col): ("E_START", "station", None),
         (center_row + 1, last_col): ("E_EXIT", "station", None),
-        (center_row - 2, center_col): ("N_PRE_WAIT", "attention", area_id),
+        (center_row - 2, center_col): ("N_APPROACH", "normal_lane", area_id),
         (center_row - 1, center_col): ("N_WAIT", "waiting", area_id),
-        (center_row + 4, center_col + 1): ("S_PRE_WAIT", "attention", area_id),
+        (center_row + 4, center_col + 1): ("S_APPROACH", "normal_lane", area_id),
         (center_row + 2, center_col + 1): ("S_WAIT", "waiting", area_id),
-        (center_row + 1, center_col - 2): ("W_PRE_WAIT", "attention", area_id),
+        (center_row + 1, center_col - 2): ("W_APPROACH", "normal_lane", area_id),
         (center_row + 1, center_col - 1): ("W_WAIT", "waiting", area_id),
-        (center_row, center_col + 4): ("E_PRE_WAIT", "attention", area_id),
+        (center_row, center_col + 4): ("E_APPROACH", "normal_lane", area_id),
         (center_row, center_col + 2): ("E_WAIT", "waiting", area_id),
         (center_row, center_col): ("CP_NW", "conflict", area_id),
         (center_row, center_col + 1): ("CP_NE", "conflict", area_id),
@@ -977,6 +961,22 @@ def _fcfs_cross_routes(graph: LaneGraph) -> dict[str, Route]:
             ],
         )
     return routes
+
+
+def _is_allowed_fcfs_conflict_edge(graph: LaneGraph, from_node: str, to_node: str) -> bool:
+    """Allow only right-hand circulation inside the FCFS 2x2 conflict zone."""
+
+    conflict_cycle = {
+        ("CP_NW", "CP_SW"),
+        ("CP_SW", "CP_SE"),
+        ("CP_SE", "CP_NE"),
+        ("CP_NE", "CP_NW"),
+    }
+    from_is_conflict = from_node.startswith("CP_")
+    to_is_conflict = to_node.startswith("CP_")
+    if from_is_conflict and to_is_conflict:
+        return (from_node, to_node) in conflict_cycle
+    return True
 
 
 def _fcfs_cross_to_rware_layout(

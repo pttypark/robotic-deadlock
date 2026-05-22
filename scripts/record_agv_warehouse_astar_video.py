@@ -36,7 +36,6 @@ COLORS = {
     "grid": (220, 224, 230),
     "station": (166, 222, 255),
     "task": (40, 40, 220),
-    "attention": (255, 170, 60),
     "waiting": (40, 170, 240),
     "conflict": (70, 70, 210),
     "text": (35, 35, 35),
@@ -146,9 +145,6 @@ def _draw_interaction_areas(frame: np.ndarray, wrapper: AGVRWARESimulationWrappe
         for node_id in area.waiting_points:
             if node_id in graph.nodes:
                 _draw_node_marker(frame, graph.nodes[node_id].position, COLORS["waiting"], "W")
-        for node_id in area.attention_points:
-            if node_id in graph.nodes:
-                _draw_node_marker(frame, graph.nodes[node_id].position, COLORS["attention"], "A")
 
 
 def _draw_tasks_and_stations(frame: np.ndarray, wrapper: AGVRWARESimulationWrapper) -> None:

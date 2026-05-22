@@ -108,6 +108,43 @@ def test_fcfs_cross_capacity_two_only_allows_disjoint_conflict_paths():
             )
 
 
+def test_fcfs_cross_conflict_zone_uses_right_hand_circulation():
+    layout = build_fcfs_cross_shared_area_layout(corridor_length=8)
+    allowed_internal_edges = {
+        ("CP_NW", "CP_SW"),
+        ("CP_SW", "CP_SE"),
+        ("CP_SE", "CP_NE"),
+        ("CP_NE", "CP_NW"),
+    }
+    actual_internal_edges = {
+        (edge.from_node, edge.to_node)
+        for edge in layout.graph.edges.values()
+        if edge.from_node in layout.interaction_areas[0].conflict_zone_nodes
+        and edge.to_node in layout.interaction_areas[0].conflict_zone_nodes
+    }
+
+    assert actual_internal_edges == allowed_internal_edges
+
+    goals = {
+        "NORTH": ["S_EXIT", "W_EXIT", "E_EXIT"],
+        "SOUTH": ["N_EXIT", "W_EXIT", "E_EXIT"],
+        "WEST": ["E_EXIT", "N_EXIT", "S_EXIT"],
+        "EAST": ["W_EXIT", "N_EXIT", "S_EXIT"],
+    }
+    experiment = FCFSCrossExperiment(
+        layout=layout,
+        robots_by_direction={direction: 3 for direction in goals},
+        goal_plan_by_direction=goals,
+        corridor_length=8,
+        random_seed=7,
+    )
+
+    for robot in experiment.active.values():
+        conflict_path = experiment._path_conflict_points(robot.path)
+        for left, right in zip(conflict_path, conflict_path[1:]):
+            assert (left, right) in allowed_internal_edges
+
+
 def test_fcfs_queue_uses_waiting_point_arrival_order():
     experiment = FCFSCrossExperiment(robots_per_direction=1)
     seen_admissions = []

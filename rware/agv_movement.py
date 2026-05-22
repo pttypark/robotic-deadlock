@@ -220,7 +220,6 @@ class AGVMovementSimulator:
             print(f"task shelf_access nodes: {self.layout.task_nodes}")
         for area in self.layout.interaction_areas:
             print(f"{area.area_id} ({area.area_type})")
-            print(f"  attention_points: {sorted(area.attention_points)}")
             print(f"  waiting_points: {sorted(area.waiting_points)}")
             print(f"  conflict_points: {sorted(area.conflict_points)}")
             if area.area_id == "IA_CROSS_001":
@@ -283,7 +282,6 @@ class AGVMovementSimulator:
                     else None,
                     "current_interaction_area_id": agv.current_interaction_area_id,
                     "has_entered_communication_zone": agv.has_entered_communication_zone,
-                    "has_reached_attention_point": agv.has_reached_attention_point,
                     "is_waiting_at_waiting_point": agv.is_waiting_at_waiting_point,
                     "has_entered_conflict_zone": agv.has_entered_conflict_zone,
                     "occupied_conflict_point": agv.occupied_conflict_point,

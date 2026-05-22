@@ -55,7 +55,7 @@ class Node:
     Args:
         node_id: Stable node identifier.
         position: Grid position as (row, col).
-        node_type: normal_lane, attention, waiting, conflict, merge, etc.
+        node_type: normal_lane, waiting, conflict, merge, etc.
         allowed_turns: Allowed action strings at this node.
         is_blocked: Whether this node is temporarily unavailable.
         interaction_area_id: Area id this node primarily belongs to, if any.
@@ -152,14 +152,13 @@ class AGVMission:
 
 @dataclass
 class InteractionArea:
-    """Paper-style interaction area with zones, AP/WP/CP, and routes.
+    """Paper-style interaction area with communication, waiting, and conflict zones.
 
     Args:
         area_id: Stable interaction area id.
         area_type: intersection, merge, bottleneck, or turn.
         communication_zone_nodes: Nodes where communication/scheduling starts.
         conflict_zone_nodes: Nodes inside the physical conflict zone.
-        attention_points: AP node ids.
         waiting_points: WP node ids.
         conflict_points: CP node ids.
         allowed_routes: Predefined area routes.
@@ -174,7 +173,6 @@ class InteractionArea:
     area_type: str
     communication_zone_nodes: set[str]
     conflict_zone_nodes: set[str]
-    attention_points: set[str]
     waiting_points: set[str]
     conflict_points: set[str]
     allowed_routes: dict[str, Route]
@@ -209,7 +207,6 @@ class AGVState:
     assigned_route_id: str | None = None
     current_interaction_area_id: str | None = None
     has_entered_communication_zone: bool = False
-    has_reached_attention_point: bool = False
     is_waiting_at_waiting_point: bool = False
     has_entered_conflict_zone: bool = False
     occupied_conflict_point: str | None = None

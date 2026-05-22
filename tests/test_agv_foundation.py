@@ -14,7 +14,7 @@ from rware.agv_topology import LaneGraph
 from rware.agv_types import AGVAction, AGVState, Edge, Heading, InteractionArea, Node
 
 
-def test_single_agv_straight_route_logs_ap_wp_cp():
+def test_single_agv_straight_route_logs_wp_cp():
     layout = build_graph_rware_intersection_v1()
     sim = AGVMovementSimulator(
         layout,
@@ -35,7 +35,6 @@ def test_single_agv_straight_route_logs_ap_wp_cp():
         sim.step({"AGV_1": AGVAction.FORWARD})
 
     event_types = {event["event_type"] for event in sim.debug_snapshot()["event_log"]}
-    assert "attention_point_reached" in event_types
     assert "waiting_point_reached" in event_types
     assert "conflict_point_occupied" in event_types
     assert sim.agvs[0].occupied_conflict_point == "CP_2"
@@ -138,7 +137,6 @@ def test_edge_swap_collision_is_logged():
         area_type="bottleneck",
         communication_zone_nodes=set(),
         conflict_zone_nodes=set(),
-        attention_points=set(),
         waiting_points=set(),
         conflict_points=set(),
         allowed_routes={},

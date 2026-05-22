@@ -247,3 +247,12 @@ $RECYCLE.BIN/
 *.lnk
 
 # End of https://www.gitignore.io/api/linux,python,windows,pycharm+all,visualstudiocode
+
+# Project-generated artifacts and local environments
+JS26/
+.codex_pdfdeps/
+outputs/
+final_output/
+video_test/
+viewer3d/render-check.png
+viewer3d/server.*.log

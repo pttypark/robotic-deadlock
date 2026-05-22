@@ -7,7 +7,7 @@ from rware.interaction_area import InteractionAreaRegistry
 
 
 class InteractionAreaManager:
-    """Update AGV AP/WP/CP state as vehicles move through interaction areas."""
+    """Update AGV communication, waiting, and conflict state."""
 
     def __init__(self, registry: InteractionAreaRegistry) -> None:
         """Create a manager from an interaction-area registry.
@@ -43,7 +43,6 @@ class InteractionAreaManager:
                 )
             agv.current_interaction_area_id = None
             agv.has_entered_communication_zone = False
-            agv.has_reached_attention_point = False
             agv.is_waiting_at_waiting_point = False
             agv.has_entered_conflict_zone = False
             agv.occupied_conflict_point = None
@@ -57,10 +56,6 @@ class InteractionAreaManager:
         ):
             agv.has_entered_communication_zone = True
             events.append(self._event(step, "communication_zone_entered", agv, area.area_id))
-
-        if agv.current_node in area.attention_points and not agv.has_reached_attention_point:
-            agv.has_reached_attention_point = True
-            events.append(self._event(step, "attention_point_reached", agv, area.area_id))
 
         is_waiting = agv.current_node in area.waiting_points
         if is_waiting and not agv.is_waiting_at_waiting_point:

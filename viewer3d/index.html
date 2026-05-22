@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RWARE 3D AGV Viewer</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main id="app">
+      <canvas id="scene"></canvas>
+      <section class="hud" aria-label="Simulation controls">
+        <div class="brand">
+          <span class="brand-title">RWARE 3D AGV Viewer</span>
+          <span id="runLabel" class="brand-subtitle">Loading trace</span>
+        </div>
+
+        <div class="control-row">
+          <button id="playButton" type="button">Play</button>
+          <button id="prevButton" type="button">Prev</button>
+          <button id="nextButton" type="button">Next</button>
+          <button id="resetButton" type="button">Reset</button>
+          <button id="topButton" type="button">Top</button>
+          <button id="orbitButton" type="button">Orbit</button>
+        </div>
+
+        <div class="timeline-row">
+          <label for="stepSlider">Step</label>
+          <input id="stepSlider" type="range" min="0" max="0" value="0" />
+          <output id="stepOutput">0 / 0</output>
+        </div>
+
+        <div class="settings-row">
+          <label for="speedSlider">Speed</label>
+          <input id="speedSlider" type="range" min="1" max="16" value="6" />
+          <output id="speedOutput">6 steps/s</output>
+          <label for="robotSelect">AGV</label>
+          <select id="robotSelect"></select>
+        </div>
+
+        <div class="stats-row">
+          <span id="policyStat">Policy -</span>
+          <span id="sharedStat">Shared -</span>
+          <span id="queueStat">Queue -</span>
+          <span id="doneStat">Done -</span>
+        </div>
+      </section>
+
+      <section id="legend" class="legend" aria-label="Map legend"></section>
+      <section id="message" class="message" aria-live="polite"></section>
+    </main>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

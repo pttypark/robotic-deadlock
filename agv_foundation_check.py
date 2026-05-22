@@ -27,7 +27,6 @@ def main() -> None:
     for _ in range(7):
         sim.step({"AGV_1": AGVAction.FORWARD})
     event_types = {event["event_type"] for event in sim.debug_snapshot()["event_log"]}
-    assert "attention_point_reached" in event_types
     assert "waiting_point_reached" in event_types
     assert "conflict_point_occupied" in event_types
 

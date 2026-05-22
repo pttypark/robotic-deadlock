@@ -21,7 +21,6 @@ CELL = 62
 MARGIN = 38
 NODE_COLORS = {
     "normal": "#d6d8dc",
-    "attention": "#4ea1ff",
     "waiting": "#f4a742",
     "conflict": "#e04f5f",
     "goal": "#5abf69",
@@ -214,7 +213,6 @@ class AGVVisualDemo:
             f"Interaction Areas: {snapshot['interaction_area_count']}",
             "",
             "Legend",
-            "blue: Attention Point",
             "orange: Waiting Point",
             "red: Conflict Point",
             "green: Goal",
@@ -227,8 +225,6 @@ class AGVVisualDemo:
                 f"heading={agv['heading']} priority={agv['priority']}"
             )
             flags = []
-            if agv["has_reached_attention_point"]:
-                flags.append("AP")
             if agv["is_waiting_at_waiting_point"]:
                 flags.append("WP")
             if agv["occupied_conflict_point"]:

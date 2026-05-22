@@ -25,7 +25,6 @@ COLORS = {
     "start": "#c8f2cf",
     "exit": "#ff2020",
     "conflict": "#f4ddcf",
-    "attention": "#95d5ff",
     "waiting": "#ffd27a",
     "grid": "#222222",
 }
@@ -40,17 +39,36 @@ ROBOT_COLORS = {
 class FCFSCrossVisualizer:
     """Visualize the FCFS shared-area admission baseline."""
 
-    def __init__(self, root: tk.Tk, delay_ms: int = 600, random_seed: int = 7) -> None:
+    def __init__(
+        self,
+        root: tk.Tk,
+        delay_ms: int = 600,
+        random_seed: int = 7,
+        robots_per_direction: int = 3,
+        corridor_length: int = 8,
+        spawn_gap_steps: int = 2,
+    ) -> None:
         """Initialize Tkinter widgets and experiment state."""
 
         self.root = root
         self.delay_ms = delay_ms
         self.random_seed = random_seed
+        self.robots_per_direction = robots_per_direction
+        self.corridor_length = corridor_length
+        self.spawn_gap_steps = spawn_gap_steps
         self.running = False
-        self.experiment = FCFSCrossExperiment(robots_per_direction=3, random_seed=random_seed)
+        self.experiment = self._new_experiment()
         self.rows, self.cols = self.experiment.layout.grid_size
         self._build_widgets()
         self._draw()
+
+    def _new_experiment(self) -> FCFSCrossExperiment:
+        return FCFSCrossExperiment(
+            robots_per_direction=self.robots_per_direction,
+            random_seed=self.random_seed,
+            corridor_length=self.corridor_length,
+            spawn_gap_steps=self.spawn_gap_steps,
+        )
 
     def _build_widgets(self) -> None:
         self.root.title("A* + FCFS Cross Shared-Area Experiment")
@@ -96,7 +114,7 @@ class FCFSCrossVisualizer:
         """Reset the experiment."""
 
         self.running = False
-        self.experiment = FCFSCrossExperiment(robots_per_direction=3, random_seed=self.random_seed)
+        self.experiment = self._new_experiment()
         self._draw()
 
     def step_once(self) -> None:
@@ -155,8 +173,6 @@ class FCFSCrossVisualizer:
                     self._cell_label(row, col, "E", "#ffffff")
                 elif node_id in self.experiment.area.waiting_points:
                     self._circle_label(row, col, "W", COLORS["waiting"])
-                elif node_id in self.experiment.area.attention_points:
-                    self._circle_label(row, col, "A", COLORS["attention"])
                 elif node_id in self.experiment.area.conflict_zone_nodes:
                     self._cell_label(row, col, "C", "#6b2b1c")
 
@@ -205,6 +221,8 @@ class FCFSCrossVisualizer:
             f"Step: {self.experiment.step_count}",
             f"Total AGVs: {metrics['robots']}",
             f"Random seed: {metrics['random_seed']}",
+            f"Corridor length: {metrics['corridor_length']}",
+            f"Spawn gap: {metrics['spawn_gap_steps']}",
             f"Completed: {metrics['completed']}",
             f"TOTAL time: {metrics['total_time'] if self.experiment.is_done else '-'}",
             "",
@@ -220,7 +238,6 @@ class FCFSCrossVisualizer:
             "White: AGV lane",
             "S: start",
             "E: exit",
-            "A: attention point",
             "W: waiting / decision point",
             "C: conflict zone",
             "AGV at E: completed AGV",
@@ -282,10 +299,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Visualize FCFS cross experiment.")
     parser.add_argument("--delay-ms", type=int, default=600)
     parser.add_argument("--random-seed", type=int, default=7)
+    parser.add_argument("--robots-per-direction", type=int, default=3)
+    parser.add_argument("--corridor-length", type=int, default=8)
+    parser.add_argument("--spawn-gap-steps", type=int, default=2)
     args = parser.parse_args()
 
     root = tk.Tk()
-    FCFSCrossVisualizer(root, delay_ms=args.delay_ms, random_seed=args.random_seed)
+    FCFSCrossVisualizer(
+        root,
+        delay_ms=args.delay_ms,
+        random_seed=args.random_seed,
+        robots_per_direction=args.robots_per_direction,
+        corridor_length=args.corridor_length,
+        spawn_gap_steps=args.spawn_gap_steps,
+    )
     root.mainloop()
 
 
