@@ -1,0 +1,6 @@
+feature,best_weight,best_avg_total_time,worst_weight,worst_avg_total_time,search_min,search_max,search_step,candidate_count
+waiting,10.0,58.3275,-0.5,60.91,-10.0,10.0,0.25,81
+maneuver,-1.75,58.43,3.25,60.755,-10.0,10.0,0.25,81
+exit_competition,-0.25,58.7525,-2.5,58.9975,-10.0,10.0,0.25,81
+path_conflict,1.0,58.8725,-10.0,59.6875,-10.0,10.0,0.25,81
+approach_queue,-10.0,58.8725,-10.0,58.8725,-10.0,10.0,0.25,81
