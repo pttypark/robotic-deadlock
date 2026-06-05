@@ -259,6 +259,112 @@ def build_fcfs_cross_shared_area_layout(
     )
 
 
+def build_fcfs_double_cross_shared_area_layout(corridor_length: int = 8) -> AGVLayout:
+    """Build experiment layout v2 with two left-right symmetric FCFS crosses.
+
+    Args:
+        corridor_length: Number of lane cells from each outside edge to the
+            nearest 2x2 conflict zone. The requested experiment uses 8.
+
+    Returns:
+        AGVLayout with the original single-cross geometry repeated as two
+        mirrored 2x2 conflict zones connected by the shared horizontal aisle.
+    """
+
+    if corridor_length < 5:
+        raise ValueError("corridor_length must be at least 5")
+
+    grid_size = (2 * corridor_length + 3, 3 * corridor_length + 5)
+    graph = LaneGraph()
+    roads = _fcfs_double_cross_road_cells(corridor_length)
+    special = _fcfs_double_cross_special_nodes(corridor_length)
+
+    for row, col in sorted(roads):
+        node_id, node_type, area_id = special.get(
+            (row, col),
+            (f"DX_{row:02d}_{col:02d}", "normal_lane", None),
+        )
+        graph.add_node(
+            Node(
+                node_id=node_id,
+                position=(row, col),
+                node_type=node_type,
+                allowed_turns=_allowed_turns(node_type),
+                interaction_area_id=area_id,
+            )
+        )
+
+    for node in list(graph.nodes.values()):
+        row, col = node.position
+        for drow, dcol in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            target_pos = (row + drow, col + dcol)
+            if target_pos not in graph.position_to_node:
+                continue
+            target_id = graph.position_to_node[target_pos]
+            if not _is_allowed_fcfs_double_cross_conflict_edge(node.node_id, target_id):
+                continue
+            edge_id = f"{node.node_id}->{target_id}"
+            if edge_id not in graph.edges:
+                graph.add_adjacent_edge(
+                    node.node_id,
+                    target_id,
+                    edge_type="intersection"
+                    if graph.nodes[target_id].node_type == "conflict"
+                    else "lane",
+                )
+
+    routes = _fcfs_double_cross_routes(graph)
+    areas = [
+        _fcfs_double_cross_interaction_area("L", routes),
+        _fcfs_double_cross_interaction_area("R", routes),
+    ]
+
+    return AGVLayout(
+        name="fcfs_double_cross_shared_area_v2",
+        grid_size=grid_size,
+        graph=graph,
+        interaction_areas=areas,
+        rware_layout=_fcfs_cross_to_rware_layout(grid_size, roads, special),
+        routes=routes,
+        initial_nodes={
+            "L_NORTH": "L_N_START",
+            "L_SOUTH": "L_S_START",
+            "WEST": "W_START",
+            "R_NORTH": "R_N_START",
+            "R_SOUTH": "R_S_START",
+            "EAST": "E_START",
+        },
+        initial_headings={
+            "L_NORTH": "SOUTH",
+            "L_SOUTH": "NORTH",
+            "WEST": "EAST",
+            "R_NORTH": "SOUTH",
+            "R_SOUTH": "NORTH",
+            "EAST": "WEST",
+        },
+        stations={
+            "L_N_START": "L_N_START",
+            "L_N_EXIT": "L_N_EXIT",
+            "L_S_START": "L_S_START",
+            "L_S_EXIT": "L_S_EXIT",
+            "W_START": "W_START",
+            "W_EXIT": "W_EXIT",
+            "R_N_START": "R_N_START",
+            "R_N_EXIT": "R_N_EXIT",
+            "R_S_START": "R_S_START",
+            "R_S_EXIT": "R_S_EXIT",
+            "E_START": "E_START",
+            "E_EXIT": "E_EXIT",
+        },
+        shelf_storage_cells={
+            (row, col)
+            for row in range(grid_size[0])
+            for col in range(grid_size[1])
+            if (row, col) not in roads
+        },
+    )
+
+
 def build_warehouse_aisle_layout_v1() -> AGVLayout:
     """Build a full warehouse-style AGV layout with A* task destinations.
 
@@ -991,3 +1097,176 @@ def _fcfs_cross_to_rware_layout(
         if node_type == "station":
             rows[row][col] = "g"
     return "\n".join("".join(row) for row in rows)
+
+
+def _fcfs_double_cross_road_cells(corridor_length: int) -> set[tuple[int, int]]:
+    rows = 2 * corridor_length + 3
+    cols = 3 * corridor_length + 5
+    center_row = corridor_length
+    left_col = corridor_length
+    right_col = cols - corridor_length - 2
+
+    roads = {
+        (row, col)
+        for row in range(rows)
+        for col in (left_col, left_col + 1, right_col, right_col + 1)
+    }
+    roads.update(
+        (row, col)
+        for row in (center_row, center_row + 1)
+        for col in range(cols)
+    )
+    return roads
+
+
+def _fcfs_double_cross_special_nodes(
+    corridor_length: int,
+) -> dict[tuple[int, int], tuple[str, str, str | None]]:
+    rows = 2 * corridor_length + 3
+    cols = 3 * corridor_length + 5
+    center_row = corridor_length
+    left_col = corridor_length
+    right_col = cols - corridor_length - 2
+    last_row = rows - 1
+    last_col = cols - 1
+
+    special: dict[tuple[int, int], tuple[str, str, str | None]] = {
+        (0, left_col): ("L_N_START", "station", None),
+        (0, left_col + 1): ("L_N_EXIT", "station", None),
+        (last_row, left_col + 1): ("L_S_START", "station", None),
+        (last_row, left_col): ("L_S_EXIT", "station", None),
+        (center_row + 1, 0): ("W_START", "station", None),
+        (center_row, 0): ("W_EXIT", "station", None),
+        (0, right_col): ("R_N_START", "station", None),
+        (0, right_col + 1): ("R_N_EXIT", "station", None),
+        (last_row, right_col + 1): ("R_S_START", "station", None),
+        (last_row, right_col): ("R_S_EXIT", "station", None),
+        (center_row, last_col): ("E_START", "station", None),
+        (center_row + 1, last_col): ("E_EXIT", "station", None),
+    }
+    special.update(
+        _fcfs_double_cross_area_special_nodes(
+            "L",
+            "IA_DOUBLE_CROSS_LEFT",
+            center_row,
+            left_col,
+        )
+    )
+    special.update(
+        _fcfs_double_cross_area_special_nodes(
+            "R",
+            "IA_DOUBLE_CROSS_RIGHT",
+            center_row,
+            right_col,
+        )
+    )
+    return special
+
+
+def _fcfs_double_cross_area_special_nodes(
+    prefix: str,
+    area_id: str,
+    center_row: int,
+    center_col: int,
+) -> dict[tuple[int, int], tuple[str, str, str | None]]:
+    return {
+        (center_row - 2, center_col): (f"{prefix}_N_APPROACH", "normal_lane", area_id),
+        (center_row - 1, center_col): (f"{prefix}_N_WAIT", "waiting", area_id),
+        (center_row + 4, center_col + 1): (f"{prefix}_S_APPROACH", "normal_lane", area_id),
+        (center_row + 2, center_col + 1): (f"{prefix}_S_WAIT", "waiting", area_id),
+        (center_row + 1, center_col - 2): (f"{prefix}_W_APPROACH", "normal_lane", area_id),
+        (center_row + 1, center_col - 1): (f"{prefix}_W_WAIT", "waiting", area_id),
+        (center_row, center_col + 4): (f"{prefix}_E_APPROACH", "normal_lane", area_id),
+        (center_row, center_col + 2): (f"{prefix}_E_WAIT", "waiting", area_id),
+        (center_row, center_col): (f"{prefix}_CP_NW", "conflict", area_id),
+        (center_row, center_col + 1): (f"{prefix}_CP_NE", "conflict", area_id),
+        (center_row + 1, center_col): (f"{prefix}_CP_SW", "conflict", area_id),
+        (center_row + 1, center_col + 1): (f"{prefix}_CP_SE", "conflict", area_id),
+    }
+
+
+def _fcfs_double_cross_interaction_area(
+    prefix: str,
+    routes: dict[str, Route],
+) -> InteractionArea:
+    area_id = "IA_DOUBLE_CROSS_LEFT" if prefix == "L" else "IA_DOUBLE_CROSS_RIGHT"
+    conflict_points = {
+        f"{prefix}_CP_NW",
+        f"{prefix}_CP_NE",
+        f"{prefix}_CP_SW",
+        f"{prefix}_CP_SE",
+    }
+    waiting_points = {
+        f"{prefix}_N_WAIT",
+        f"{prefix}_S_WAIT",
+        f"{prefix}_W_WAIT",
+        f"{prefix}_E_WAIT",
+    }
+    communication = waiting_points | {
+        f"{prefix}_N_APPROACH",
+        f"{prefix}_S_APPROACH",
+        f"{prefix}_W_APPROACH",
+        f"{prefix}_E_APPROACH",
+    }
+    area_routes = {
+        route_id: route
+        for route_id, route in routes.items()
+        if any(node_id.startswith(f"{prefix}_CP_") for node_id in route.conflict_points_on_route)
+    }
+    return InteractionArea(
+        area_id=area_id,
+        area_type="intersection",
+        communication_zone_nodes=communication,
+        conflict_zone_nodes=conflict_points,
+        waiting_points=waiting_points,
+        conflict_points=conflict_points,
+        allowed_routes=area_routes,
+        priority_rule="fcfs",
+        metadata={
+            "rule": "one_amr_in_each_shared_area",
+            "conflict_zone_shape": "2x2",
+            "layout_role": "left_cross" if prefix == "L" else "right_cross",
+        },
+    )
+
+
+def _fcfs_double_cross_routes(graph: LaneGraph) -> dict[str, Route]:
+    route_specs = {
+        "L_NORTH_TO_SOUTH": ("L_NORTH", "L_SOUTH", "straight", "L_N_START", "L_S_EXIT"),
+        "L_SOUTH_TO_NORTH": ("L_SOUTH", "L_NORTH", "straight", "L_S_START", "L_N_EXIT"),
+        "WEST_TO_EAST": ("WEST", "EAST", "straight", "W_START", "E_EXIT"),
+        "R_NORTH_TO_SOUTH": ("R_NORTH", "R_SOUTH", "straight", "R_N_START", "R_S_EXIT"),
+        "R_SOUTH_TO_NORTH": ("R_SOUTH", "R_NORTH", "straight", "R_S_START", "R_N_EXIT"),
+        "EAST_TO_WEST": ("EAST", "WEST", "straight", "E_START", "W_EXIT"),
+    }
+    routes = {}
+    from rware.agv_path_planning import astar_path
+
+    for route_id, (entry, exit_, route_type, start, goal) in route_specs.items():
+        path = astar_path(graph, start, goal)
+        routes[route_id] = Route(
+            route_id=route_id,
+            entry_direction=entry,
+            exit_direction=exit_,
+            route_type=route_type,
+            node_sequence=path,
+            conflict_points_on_route=[
+                node_id for node_id in path if "_CP_" in node_id
+            ],
+        )
+    return routes
+
+
+def _is_allowed_fcfs_double_cross_conflict_edge(from_node: str, to_node: str) -> bool:
+    for prefix in ("L", "R"):
+        conflict_cycle = {
+            (f"{prefix}_CP_NW", f"{prefix}_CP_SW"),
+            (f"{prefix}_CP_SW", f"{prefix}_CP_SE"),
+            (f"{prefix}_CP_SE", f"{prefix}_CP_NE"),
+            (f"{prefix}_CP_NE", f"{prefix}_CP_NW"),
+        }
+        from_is_conflict = from_node.startswith(f"{prefix}_CP_")
+        to_is_conflict = to_node.startswith(f"{prefix}_CP_")
+        if from_is_conflict and to_is_conflict:
+            return (from_node, to_node) in conflict_cycle
+    return True

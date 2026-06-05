@@ -7,7 +7,10 @@ TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.abspath(os.path.join(TEST_DIR, os.pardir))
 sys.path.insert(0, PROJECT_DIR)
 
-from rware.agv_layouts import build_fcfs_cross_shared_area_layout
+from rware.agv_layouts import (
+    build_fcfs_cross_shared_area_layout,
+    build_fcfs_double_cross_shared_area_layout,
+)
 from rware.fcfs_cross_simulation import FCFSCrossExperiment
 
 
@@ -20,6 +23,76 @@ def test_fcfs_cross_layout_has_four_starts_exits_and_shared_area():
     assert {"N_EXIT", "S_EXIT", "W_EXIT", "E_EXIT"}.issubset(layout.stations)
     assert area.conflict_zone_nodes == {"CP_NW", "CP_NE", "CP_SW", "CP_SE"}
     assert area.priority_rule == "fcfs"
+
+
+def test_fcfs_double_cross_layout_is_left_right_symmetric():
+    layout = build_fcfs_double_cross_shared_area_layout()
+    rows, cols = layout.grid_size
+    road_positions = {node.position for node in layout.graph.nodes.values()}
+    mirrored_positions = {(row, cols - 1 - col) for row, col in road_positions}
+
+    assert layout.name == "fcfs_double_cross_shared_area_v2"
+    assert layout.grid_size == (19, 29)
+    assert road_positions == mirrored_positions
+    assert len(layout.interaction_areas) == 2
+    assert {area.area_id for area in layout.interaction_areas} == {
+        "IA_DOUBLE_CROSS_LEFT",
+        "IA_DOUBLE_CROSS_RIGHT",
+    }
+    assert layout.interaction_areas[0].conflict_zone_nodes == {
+        "L_CP_NW",
+        "L_CP_NE",
+        "L_CP_SW",
+        "L_CP_SE",
+    }
+    assert layout.interaction_areas[1].conflict_zone_nodes == {
+        "R_CP_NW",
+        "R_CP_NE",
+        "R_CP_SW",
+        "R_CP_SE",
+    }
+    assert {
+        "L_N_START",
+        "L_N_EXIT",
+        "L_S_START",
+        "L_S_EXIT",
+        "W_START",
+        "W_EXIT",
+        "R_N_START",
+        "R_N_EXIT",
+        "R_S_START",
+        "R_S_EXIT",
+        "E_START",
+        "E_EXIT",
+    }.issubset(layout.stations)
+
+
+def test_fcfs_double_cross_layout_has_two_right_hand_conflict_cycles():
+    layout = build_fcfs_double_cross_shared_area_layout()
+
+    for prefix, area in zip(("L", "R"), layout.interaction_areas):
+        allowed_internal_edges = {
+            (f"{prefix}_CP_NW", f"{prefix}_CP_SW"),
+            (f"{prefix}_CP_SW", f"{prefix}_CP_SE"),
+            (f"{prefix}_CP_SE", f"{prefix}_CP_NE"),
+            (f"{prefix}_CP_NE", f"{prefix}_CP_NW"),
+        }
+        actual_internal_edges = {
+            (edge.from_node, edge.to_node)
+            for edge in layout.graph.edges.values()
+            if edge.from_node in area.conflict_zone_nodes
+            and edge.to_node in area.conflict_zone_nodes
+        }
+
+        assert actual_internal_edges == allowed_internal_edges
+
+    assert "WEST_TO_EAST" in layout.routes
+    assert set(layout.routes["WEST_TO_EAST"].conflict_points_on_route) == {
+        "L_CP_SW",
+        "L_CP_SE",
+        "R_CP_SW",
+        "R_CP_SE",
+    }
 
 
 def test_fcfs_cross_completes_12_robots_and_reports_total_time():

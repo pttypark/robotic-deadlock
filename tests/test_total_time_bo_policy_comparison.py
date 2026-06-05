@@ -53,9 +53,10 @@ def test_fcfs_cross_accepts_per_agv_spawn_plan():
     }
 
 
-def test_generated_scenarios_fix_16_agvs_start_times_and_goals():
+def test_generated_scenarios_fix_total_agvs_start_times_and_goals():
     scenarios = _generate_scenarios(
         count=3,
+        total_agvs=TOTAL_AGVS,
         seed_base=100,
         scenario_seed=200,
         max_planned_spawn_step=24,
@@ -76,6 +77,7 @@ def test_generated_scenarios_fix_16_agvs_start_times_and_goals():
 def test_fixed_and_bo_with_same_weights_match_on_same_scenario():
     scenario = _generate_scenarios(
         count=1,
+        total_agvs=TOTAL_AGVS,
         seed_base=100,
         scenario_seed=201,
         max_planned_spawn_step=10,
