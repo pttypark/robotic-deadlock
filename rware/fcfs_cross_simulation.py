@@ -6,7 +6,11 @@ import random
 from collections import deque
 from dataclasses import dataclass, field
 
-from rware.agv_layouts import AGVLayout, build_fcfs_cross_shared_area_layout
+from rware.agv_layouts import (
+    AGVLayout,
+    build_fcfs_cross_shared_area_layout,
+    build_fcfs_double_cross_shared_area_layout,
+)
 from rware.agv_path_planning import astar_path
 from rware.agv_topology import heading_between
 from rware.agv_types import Heading
@@ -88,6 +92,62 @@ class FCFSCrossExperiment:
         "NORTH": Heading.SOUTH,
         "SOUTH": Heading.NORTH,
         "WEST": Heading.EAST,
+        "EAST": Heading.WEST,
+    }
+    DOUBLE_START_BY_DIRECTION = {
+        "L_NORTH": "L_N_START",
+        "L_SOUTH": "L_S_START",
+        "WEST": "W_START",
+        "R_NORTH": "R_N_START",
+        "R_SOUTH": "R_S_START",
+        "EAST": "E_START",
+    }
+    DOUBLE_EXIT_BY_DIRECTION = {
+        "L_NORTH": "L_S_EXIT",
+        "L_SOUTH": "L_N_EXIT",
+        "WEST": "E_EXIT",
+        "R_NORTH": "R_S_EXIT",
+        "R_SOUTH": "R_N_EXIT",
+        "EAST": "W_EXIT",
+    }
+    DOUBLE_EXIT_DIRECTION_BY_NODE = {
+        "L_N_EXIT": "L_NORTH",
+        "L_S_EXIT": "L_SOUTH",
+        "W_EXIT": "WEST",
+        "R_N_EXIT": "R_NORTH",
+        "R_S_EXIT": "R_SOUTH",
+        "E_EXIT": "EAST",
+    }
+    DOUBLE_WAIT_BY_DIRECTION = {
+        "L_NORTH": "L_N_WAIT",
+        "L_SOUTH": "L_S_WAIT",
+        "WEST": "L_W_WAIT",
+        "R_NORTH": "R_N_WAIT",
+        "R_SOUTH": "R_S_WAIT",
+        "EAST": "R_E_WAIT",
+    }
+    DOUBLE_ENTRY_CONFLICT_BY_DIRECTION = {
+        "L_NORTH": "L_CP_NW",
+        "L_SOUTH": "L_CP_SE",
+        "WEST": "L_CP_SW",
+        "R_NORTH": "R_CP_NW",
+        "R_SOUTH": "R_CP_SE",
+        "EAST": "R_CP_NE",
+    }
+    DOUBLE_EXIT_CONFLICT_BY_GOAL = {
+        "L_N_EXIT": "L_CP_NE",
+        "L_S_EXIT": "L_CP_SW",
+        "W_EXIT": "L_CP_NW",
+        "R_N_EXIT": "R_CP_NE",
+        "R_S_EXIT": "R_CP_SW",
+        "E_EXIT": "R_CP_SE",
+    }
+    DOUBLE_HEADING_BY_DIRECTION = {
+        "L_NORTH": Heading.SOUTH,
+        "L_SOUTH": Heading.NORTH,
+        "WEST": Heading.EAST,
+        "R_NORTH": Heading.SOUTH,
+        "R_SOUTH": Heading.NORTH,
         "EAST": Heading.WEST,
     }
     POLICY_LABELS = {
@@ -218,6 +278,7 @@ class FCFSCrossExperiment:
 
         if robots_per_direction < 1:
             raise ValueError("robots_per_direction must be at least 1")
+        self._configure_direction_maps(layout)
         robots_by_direction = self._normalize_robot_counts(
             robots_by_direction,
             robots_per_direction,
@@ -256,7 +317,8 @@ class FCFSCrossExperiment:
             corridor_length = (layout.grid_size[0] - 3) // 2
             west_exit_extension = max(0, layout.grid_size[1] - layout.grid_size[0])
         self.graph = self.layout.graph
-        self.area = self.layout.interaction_areas[0]
+        self.areas = list(self.layout.interaction_areas)
+        self.area = self.areas[0]
         self.robots_per_direction = robots_per_direction
         self.robots_by_direction = robots_by_direction
         self.total_robots = sum(robots_by_direction.values())
@@ -287,9 +349,17 @@ class FCFSCrossExperiment:
         self.pending_by_direction: dict[str, deque[FCFSRobotState]] = {}
         self.active: dict[str, FCFSRobotState] = {}
         self.completed: list[FCFSRobotState] = []
-        self.fcfs_queue: deque[str] = deque()
+        self.fcfs_queues: dict[str, deque[str]] = {
+            area.area_id: deque()
+            for area in self.areas
+        }
+        self.fcfs_queue: deque[str] = self.fcfs_queues[self.area.area_id]
         self.shared_robot_id: str | None = None
-        self.shared_robot_ids: set[str] = set()
+        self.shared_robot_ids_by_area: dict[str, set[str]] = {
+            area.area_id: set()
+            for area in self.areas
+        }
+        self.shared_robot_ids: set[str] = self.shared_robot_ids_by_area[self.area.area_id]
         self.selection_count = 0
         self.shared_occupied_steps = 0
         self.event_log: list[dict] = []
@@ -318,6 +388,16 @@ class FCFSCrossExperiment:
             }
         else:
             raise ValueError(f"Unknown scenario_name: {scenario_name}")
+
+    def _configure_direction_maps(self, layout: AGVLayout | None) -> None:
+        if layout is not None and layout.name == "fcfs_double_cross_shared_area_v2":
+            self.START_BY_DIRECTION = dict(self.DOUBLE_START_BY_DIRECTION)
+            self.EXIT_BY_DIRECTION = dict(self.DOUBLE_EXIT_BY_DIRECTION)
+            self.EXIT_DIRECTION_BY_NODE = dict(self.DOUBLE_EXIT_DIRECTION_BY_NODE)
+            self.WAIT_BY_DIRECTION = dict(self.DOUBLE_WAIT_BY_DIRECTION)
+            self.ENTRY_CONFLICT_BY_DIRECTION = dict(self.DOUBLE_ENTRY_CONFLICT_BY_DIRECTION)
+            self.EXIT_CONFLICT_BY_GOAL = dict(self.DOUBLE_EXIT_CONFLICT_BY_GOAL)
+            self.HEADING_BY_DIRECTION = dict(self.DOUBLE_HEADING_BY_DIRECTION)
 
     def _normalize_robot_counts(
         self,
@@ -576,14 +656,14 @@ class FCFSCrossExperiment:
             )
 
     def _build_robots(self) -> None:
-        for direction in ("NORTH", "SOUTH", "WEST", "EAST"):
+        for direction in self.START_BY_DIRECTION:
             start = self.START_BY_DIRECTION[direction]
             goals = self._goals_for_direction(direction)
             spawn_offset = self.spawn_offsets_by_direction[direction]
             spawn_plan = self.spawn_plan_by_direction.get(direction)
             self.pending_by_direction[direction] = deque()
             for idx in range(self.robots_by_direction[direction]):
-                robot_id = f"AGV_{direction[0]}{idx + 1}"
+                robot_id = f"AGV_{self._direction_code(direction)}{idx + 1}"
                 goal = goals[idx]
                 path = self._path_via_own_waiting_point(direction, start, goal)
                 if spawn_plan is None:
@@ -619,6 +699,11 @@ class FCFSCrossExperiment:
                         node=start,
                         metadata={"planned_spawn_step": robot.metadata["planned_spawn_step"]},
                     )
+
+    def _direction_code(self, direction: str) -> str:
+        if direction in {"NORTH", "SOUTH", "WEST", "EAST"}:
+            return direction[0]
+        return "".join(part[0] for part in direction.split("_"))
 
     def _place_robot(self, robot: FCFSRobotState, event_type: str) -> None:
         robot.current_node = robot.start_node
@@ -698,34 +783,80 @@ class FCFSCrossExperiment:
     def _path_conflict_points(self, path: list[str]) -> list[str]:
         """Return conflict-zone nodes included in a path."""
 
-        return [node_id for node_id in path if node_id in self.area.conflict_zone_nodes]
+        conflict_nodes = set().union(*(area.conflict_zone_nodes for area in self.areas))
+        return [node_id for node_id in path if node_id in conflict_nodes]
+
+    def _path_conflict_points_for_area(self, path: list[str], area) -> list[str]:
+        return [node_id for node_id in path if node_id in area.conflict_zone_nodes]
+
+    def _area_for_waiting_transition(self, robot: FCFSRobotState):
+        for area in self.areas:
+            if (
+                robot.current_node in area.waiting_points
+                and robot.next_node in area.conflict_zone_nodes
+            ):
+                return area
+        return None
+
+    def _area_for_conflict_node(self, node_id: str | None):
+        if node_id is None:
+            return None
+        for area in self.areas:
+            if node_id in area.conflict_zone_nodes:
+                return area
+        return None
 
     def _enqueue_waiting_robots(self) -> None:
         for robot in sorted(self.active.values(), key=lambda item: item.robot_id):
-            if robot.robot_id in self.fcfs_queue:
+            area = self._area_for_waiting_transition(robot)
+            if area is None:
                 continue
-            if robot.current_node in self.area.waiting_points and robot.next_node in self.area.conflict_zone_nodes:
-                robot.waiting_point_step = self.step_count
-                self.fcfs_queue.append(robot.robot_id)
-                self._event("fcfs_waiting_point_arrival", robot, node=robot.current_node)
+            queue = self.fcfs_queues[area.area_id]
+            if robot.robot_id in queue:
+                continue
+            robot.waiting_point_step = self.step_count
+            queue.append(robot.robot_id)
+            self._event(
+                "fcfs_waiting_point_arrival",
+                robot,
+                node=robot.current_node,
+                metadata={"area_id": area.area_id},
+            )
 
     def _admit_next_if_possible(self) -> str | list[str] | None:
-        if len(self.shared_robot_ids) >= self.shared_area_capacity:
+        admitted = []
+        for area in self.areas:
+            area_admitted = self._admit_next_for_area(area)
+            if area_admitted is None:
+                continue
+            if isinstance(area_admitted, list):
+                admitted.extend(area_admitted)
+            else:
+                admitted.append(area_admitted)
+        if not admitted:
             return None
-        self._drop_stale_queue_entries()
-        if not self._admission_window_ready():
+        if len(admitted) == 1:
+            return admitted[0]
+        return admitted
+
+    def _admit_next_for_area(self, area) -> str | list[str] | None:
+        shared_robot_ids = self.shared_robot_ids_by_area[area.area_id]
+        if len(shared_robot_ids) >= self.shared_area_capacity:
+            return None
+        self._drop_stale_queue_entries(area)
+        if not self._admission_window_ready(area):
             return None
         admitted = []
-        while len(self.shared_robot_ids) < self.shared_area_capacity:
-            previous_count = len(self.shared_robot_ids)
+        while len(shared_robot_ids) < self.shared_area_capacity:
+            previous_count = len(shared_robot_ids)
             if self.policy_type == "fcfs":
-                robot_id = self._admit_next_fcfs()
+                robot_id = self._admit_next_fcfs(area)
             else:
-                robot_id = self._admit_next_by_score()
+                robot_id = self._admit_next_by_score(area)
             if robot_id is None:
                 break
             admitted.append(robot_id)
-            if len(self.shared_robot_ids) == previous_count:
+            if len(shared_robot_ids) == previous_count:
                 break
         if not admitted:
             return None
@@ -733,34 +864,37 @@ class FCFSCrossExperiment:
             return admitted[0]
         return admitted
 
-    def _admit_next_fcfs(self) -> str | None:
-        while self.fcfs_queue:
-            robot_id = self.fcfs_queue[0]
+    def _admit_next_fcfs(self, area=None) -> str | None:
+        area = area or self.area
+        queue = self.fcfs_queues[area.area_id]
+        while queue:
+            robot_id = queue[0]
             robot = self.active.get(robot_id)
-            if robot is None or robot.current_node not in self.area.waiting_points:
-                self.fcfs_queue.popleft()
+            if robot is None or robot.current_node not in area.waiting_points:
+                queue.popleft()
                 continue
-            if not self._compatible_with_shared_area(robot):
+            if not self._compatible_with_shared_area(robot, area):
                 return None
-            candidates = self._current_waiting_candidates()
+            candidates = self._current_waiting_candidates(area)
             self._record_decision(candidates, robot.robot_id)
-            self.fcfs_queue.popleft()
-            self._add_shared_robot(robot_id)
+            queue.popleft()
+            self._add_shared_robot(robot_id, area)
             robot.status = "admitted"
-            robot.shared_wait_time = self._shared_wait_steps(robot)
+            robot.shared_wait_time += self._shared_wait_steps(robot)
             self.selection_count += 1
-            self._event("fcfs_admitted", robot, node=robot.current_node)
+            self._event("fcfs_admitted", robot, node=robot.current_node, metadata={"area_id": area.area_id})
             return robot_id
         return None
 
-    def _admit_next_by_score(self) -> str | None:
-        candidates = self._current_waiting_candidates()
+    def _admit_next_by_score(self, area=None) -> str | None:
+        area = area or self.area
+        candidates = self._current_waiting_candidates(area)
         if not candidates:
             return None
         compatible_candidates = [
             robot
             for robot in candidates
-            if self._compatible_with_shared_area(robot)
+            if self._compatible_with_shared_area(robot, area)
         ]
         if not compatible_candidates:
             return None
@@ -771,26 +905,31 @@ class FCFSCrossExperiment:
         scored.sort(key=lambda item: (-item[0], item[1], item[2]))
         selected = scored[0][3]
         self._record_decision(candidates, selected.robot_id)
-        self.fcfs_queue = deque(robot_id for robot_id in self.fcfs_queue if robot_id != selected.robot_id)
+        queue = self.fcfs_queues[area.area_id]
+        self.fcfs_queues[area.area_id] = deque(robot_id for robot_id in queue if robot_id != selected.robot_id)
+        if area.area_id == self.area.area_id:
+            self.fcfs_queue = self.fcfs_queues[area.area_id]
         for robot in candidates:
             if robot.robot_id != selected.robot_id:
                 robot.yielded_count += 1
-        self._add_shared_robot(selected.robot_id)
+        self._add_shared_robot(selected.robot_id, area)
         selected.status = "admitted"
-        selected.shared_wait_time = self._shared_wait_steps(selected)
+        selected.shared_wait_time += self._shared_wait_steps(selected)
         self.selection_count += 1
         self._event(
             "heuristic_admitted",
             selected,
             node=selected.current_node,
-            metadata={"score": scored[0][0], "policy_type": self.policy_type},
+            metadata={"score": scored[0][0], "policy_type": self.policy_type, "area_id": area.area_id},
         )
         return selected.robot_id
 
-    def _admission_window_ready(self) -> bool:
-        if self.admission_window_steps == 0 or not self.fcfs_queue:
+    def _admission_window_ready(self, area=None) -> bool:
+        area = area or self.area
+        queue = self.fcfs_queues[area.area_id]
+        if self.admission_window_steps == 0 or not queue:
             return True
-        candidates = self._current_waiting_candidates()
+        candidates = self._current_waiting_candidates(area)
         if not candidates:
             return False
         first_arrival = min(
@@ -800,12 +939,13 @@ class FCFSCrossExperiment:
         )
         return self.step_count - first_arrival >= self.admission_window_steps
 
-    def _current_waiting_candidates(self) -> list[FCFSRobotState]:
+    def _current_waiting_candidates(self, area=None) -> list[FCFSRobotState]:
+        area = area or self.area
         return [
             self.active[robot_id]
-            for robot_id in self.fcfs_queue
+            for robot_id in self.fcfs_queues[area.area_id]
             if robot_id in self.active
-            and self.active[robot_id].current_node in self.area.waiting_points
+            and self.active[robot_id].current_node in area.waiting_points
         ]
 
     def _shared_wait_steps(self, robot: FCFSRobotState) -> int:
@@ -813,12 +953,15 @@ class FCFSCrossExperiment:
             return 0
         return self.step_count - robot.waiting_point_step
 
-    def _drop_stale_queue_entries(self) -> None:
-        self.fcfs_queue = deque(
+    def _drop_stale_queue_entries(self, area=None) -> None:
+        area = area or self.area
+        self.fcfs_queues[area.area_id] = deque(
             robot_id
-            for robot_id in self.fcfs_queue
-            if robot_id in self.active and self.active[robot_id].current_node in self.area.waiting_points
+            for robot_id in self.fcfs_queues[area.area_id]
+            if robot_id in self.active and self.active[robot_id].current_node in area.waiting_points
         )
+        if area.area_id == self.area.area_id:
+            self.fcfs_queue = self.fcfs_queues[area.area_id]
 
     def _admission_score(self, robot: FCFSRobotState, candidates: list[FCFSRobotState]) -> float:
         if self.normalize_heuristic_features:
@@ -865,8 +1008,9 @@ class FCFSCrossExperiment:
         )
 
     def _numeric_robot_id(self, robot: FCFSRobotState) -> int:
-        direction_order = ["NORTH", "SOUTH", "WEST", "EAST"]
-        sequence = int(robot.robot_id.split("_")[1][1:])
+        direction_order = list(self.START_BY_DIRECTION)
+        suffix = robot.robot_id.split("_", 1)[1]
+        sequence = int("".join(character for character in suffix if character.isdigit()))
         offset = sum(
             self.robots_by_direction[direction]
             for direction in direction_order[: direction_order.index(robot.direction)]
@@ -875,19 +1019,20 @@ class FCFSCrossExperiment:
 
     def _record_shared_occupancy(self) -> None:
         if any(
-            robot.current_node in self.area.conflict_zone_nodes
+            self._area_for_conflict_node(robot.current_node) is not None
             for robot in self.active.values()
         ):
             self.shared_occupied_steps += 1
 
     def _decision_features(self, robot: FCFSRobotState, candidates: list[FCFSRobotState]) -> dict:
-        conflict_path = set(self._path_conflict_points(robot.path[robot.path_index:]))
+        area = self._area_for_waiting_transition(robot) or self.area
+        conflict_path = set(self._path_conflict_points_for_area(robot.path[robot.path_index:], area))
         candidate_paths = {
-            other.robot_id: set(self._path_conflict_points(other.path[other.path_index:]))
+            other.robot_id: set(self._path_conflict_points_for_area(other.path[other.path_index:], area))
             for other in candidates
         }
         waiting_steps = self._shared_wait_steps(robot)
-        queue = list(self.fcfs_queue)
+        queue = list(self.fcfs_queues[area.area_id])
         queue_position = queue.index(robot.robot_id) if robot.robot_id in queue else -1
         same_direction = [
             other
@@ -921,9 +1066,10 @@ class FCFSCrossExperiment:
             "remaining_path_length": len(robot.path) - robot.path_index - 1,
             "shared_zone_entry_step": robot.path_index,
             "global_active_agents": len(self.active),
-            "shared_zone_occupied": int(self.shared_robot_id is not None),
-            "shared_zone_occupancy": len(self.shared_robot_ids),
+            "shared_zone_occupied": int(bool(self.shared_robot_ids_by_area[area.area_id])),
+            "shared_zone_occupancy": len(self.shared_robot_ids_by_area[area.area_id]),
             "shared_zone_capacity": self.shared_area_capacity,
+            "shared_area_id": area.area_id,
             "selection_order_length": self.selection_count,
             "task_priority": robot.priority,
             "yielded_count": robot.yielded_count,
@@ -979,6 +1125,8 @@ class FCFSCrossExperiment:
         exit_direction = self.EXIT_DIRECTION_BY_NODE[robot.goal_node]
         if self.EXIT_BY_DIRECTION[entry] == robot.goal_node:
             return "straight"
+        entry = self._cardinal_direction(entry)
+        exit_direction = self._cardinal_direction(exit_direction)
         order = ["NORTH", "EAST", "SOUTH", "WEST"]
         delta = (order.index(exit_direction) - order.index(entry)) % 4
         if delta == 1:
@@ -989,6 +1137,13 @@ class FCFSCrossExperiment:
 
     def _maneuver_priority(self, robot: FCFSRobotState) -> float:
         return {"left": 0.0, "straight": 0.5, "right": 1.0}[self._maneuver_type(robot)]
+
+    def _cardinal_direction(self, direction: str) -> str:
+        if direction.endswith("NORTH"):
+            return "NORTH"
+        if direction.endswith("SOUTH"):
+            return "SOUTH"
+        return direction
 
     def _decision_rule_label(self) -> str:
         if self.policy_type == "fcfs":
@@ -1019,7 +1174,12 @@ class FCFSCrossExperiment:
             elif next_node is None:
                 allowed = False
                 reason = "route_completed"
-            elif next_node in self.area.conflict_zone_nodes and robot_id not in self.shared_robot_ids:
+            elif (
+                self._area_for_conflict_node(next_node) is not None
+                and robot_id not in self.shared_robot_ids_by_area[
+                    self._area_for_conflict_node(next_node).area_id
+                ]
+            ):
                 allowed = False
                 reason = "waiting_for_fcfs_admission"
             elif next_node in occupied:
@@ -1032,7 +1192,9 @@ class FCFSCrossExperiment:
                 "allowed": allowed,
                 "reason": reason,
                 "shared_robot_id": self.shared_robot_id,
-                "shared_robot_ids": sorted(self.shared_robot_ids),
+                "shared_robot_ids": sorted(
+                    set().union(*self.shared_robot_ids_by_area.values())
+                ),
             }
         return proposals
 
@@ -1048,45 +1210,68 @@ class FCFSCrossExperiment:
             robot.path_index += 1
             moved.append(robot_id)
             self._update_heading(robot, previous, robot.current_node)
-            if robot.current_node in self.area.conflict_zone_nodes and robot.shared_entry_step is None:
+            entered_area = self._area_for_conflict_node(robot.current_node)
+            if entered_area is not None and robot.shared_entry_step is None:
                 robot.shared_entry_step = self.step_count
-                self._event("shared_area_entered", robot, node=robot.current_node)
+                self._event(
+                    "shared_area_entered",
+                    robot,
+                    node=robot.current_node,
+                    metadata={"area_id": entered_area.area_id},
+                )
             self._event("moved", robot, node=robot.current_node, metadata={"from_node": previous})
         return moved
 
     def _release_shared_area_if_empty(self) -> None:
-        if not self.shared_robot_ids:
-            return
-        for robot_id in list(self.shared_robot_ids):
-            robot = self.active.get(robot_id)
-            if robot is not None and robot.current_node in self.area.conflict_zone_nodes:
+        for area in self.areas:
+            shared_robot_ids = self.shared_robot_ids_by_area[area.area_id]
+            if not shared_robot_ids:
                 continue
-            self.shared_robot_ids.remove(robot_id)
-            self._sync_shared_robot_id()
-            if robot is not None:
-                robot.status = "active"
-                self._event("shared_area_released", robot, node=robot.current_node)
-            else:
-                self.event_log.append(
-                    {"step": self.step_count, "event_type": "shared_area_released", "robot_id": robot_id}
-                )
+            for robot_id in list(shared_robot_ids):
+                robot = self.active.get(robot_id)
+                if robot is not None and robot.current_node in area.conflict_zone_nodes:
+                    continue
+                shared_robot_ids.remove(robot_id)
+                self._sync_shared_robot_id()
+                if robot is not None:
+                    robot.status = "active"
+                    self._event(
+                        "shared_area_released",
+                        robot,
+                        node=robot.current_node,
+                        metadata={"area_id": area.area_id},
+                    )
+                else:
+                    self.event_log.append(
+                        {
+                            "step": self.step_count,
+                            "event_type": "shared_area_released",
+                            "robot_id": robot_id,
+                            "area_id": area.area_id,
+                        }
+                    )
 
-    def _add_shared_robot(self, robot_id: str) -> None:
-        self.shared_robot_ids.add(robot_id)
+    def _add_shared_robot(self, robot_id: str, area=None) -> None:
+        area = area or self.area
+        self.shared_robot_ids_by_area[area.area_id].add(robot_id)
         self._sync_shared_robot_id()
 
     def _sync_shared_robot_id(self) -> None:
-        self.shared_robot_id = sorted(self.shared_robot_ids)[0] if self.shared_robot_ids else None
+        self.shared_robot_ids = self.shared_robot_ids_by_area[self.area.area_id]
+        all_shared_robot_ids = sorted(set().union(*self.shared_robot_ids_by_area.values()))
+        self.shared_robot_id = all_shared_robot_ids[0] if all_shared_robot_ids else None
 
-    def _compatible_with_shared_area(self, robot: FCFSRobotState) -> bool:
-        if len(self.shared_robot_ids) >= self.shared_area_capacity:
+    def _compatible_with_shared_area(self, robot: FCFSRobotState, area=None) -> bool:
+        area = area or self.area
+        shared_robot_ids = self.shared_robot_ids_by_area[area.area_id]
+        if len(shared_robot_ids) >= self.shared_area_capacity:
             return False
-        robot_conflicts = set(self._path_conflict_points(robot.path[robot.path_index:]))
-        for shared_robot_id in self.shared_robot_ids:
+        robot_conflicts = set(self._path_conflict_points_for_area(robot.path[robot.path_index:], area))
+        for shared_robot_id in shared_robot_ids:
             other = self.active.get(shared_robot_id)
             if other is None:
                 continue
-            other_conflicts = set(self._path_conflict_points(other.path[other.path_index:]))
+            other_conflicts = set(self._path_conflict_points_for_area(other.path[other.path_index:], area))
             if robot_conflicts & other_conflicts:
                 return False
         return True
