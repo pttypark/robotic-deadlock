@@ -82,22 +82,28 @@ WEIGHTS_BY_POLICY = {
     "pso_heuristic": _complete_heuristic_weights(PSO_WEIGHTS),
 }
 COLORS = {
-    "background": (213, 215, 214),
-    "floor_dark": (191, 194, 193),
-    "floor_line": (177, 180, 178),
-    "road": (226, 228, 226),
-    "road_edge": (152, 158, 160),
-    "lane_mark": (244, 246, 240),
-    "waiting": (92, 159, 178),
-    "conflict": (80, 99, 129),
-    "start": (118, 159, 128),
-    "exit": (123, 111, 98),
-    "text": (31, 34, 38),
-    "muted": (78, 84, 89),
-    "shadow": (38, 43, 47),
+    "background": (230, 234, 234),
+    "floor_dark": (197, 203, 205),
+    "floor_line": (177, 185, 188),
+    "road": (235, 238, 236),
+    "road_edge": (139, 149, 153),
+    "lane_mark": (255, 255, 247),
+    "waiting": (66, 156, 196),
+    "conflict": (62, 78, 124),
+    "start": (103, 176, 128),
+    "exit": (221, 124, 104),
+    "text": (30, 34, 40),
+    "muted": (85, 93, 101),
+    "panel": (24, 30, 40),
+    "panel_light": (246, 248, 247),
+    "shadow": (35, 39, 45),
     "metal": (58, 65, 72),
     "tire": (22, 25, 28),
-    "headlight": (236, 244, 210),
+    "headlight": (246, 249, 204),
+    "progress": (86, 181, 130),
+    "queue": (255, 190, 72),
+    "shared": (76, 194, 222),
+    "bo": (58, 154, 255),
 }
 ROBOT_COLORS = {
     "NORTH": (42, 114, 184),
@@ -108,6 +114,12 @@ ROBOT_COLORS = {
     "R_SOUTH": (66, 142, 74),
     "WEST": (172, 80, 112),
     "EAST": (196, 118, 48),
+}
+POLICY_ACCENTS = {
+    "fcfs": (118, 130, 145),
+    "fixed_heuristic": (77, 169, 108),
+    "bo_heuristic": (58, 154, 255),
+    "pso_heuristic": (221, 95, 91),
 }
 
 
@@ -272,20 +284,41 @@ def _build_experiment(
 
 
 def _snapshot(experiment: FCFSCrossExperiment) -> dict:
+    shared_robot_ids_by_area = {
+        area_id: sorted(robot_ids)
+        for area_id, robot_ids in experiment.shared_robot_ids_by_area.items()
+    }
+    queued_robot_ids = sorted(
+        {
+            robot_id
+            for queue in experiment.fcfs_queues.values()
+            for robot_id in queue
+        }
+    )
+    shared_robot_ids = sorted(
+        {
+            robot_id
+            for robot_ids in shared_robot_ids_by_area.values()
+            for robot_id in robot_ids
+        }
+    )
     robots = {}
     for robot_id, robot in experiment.active.items():
         robots[robot_id] = {
             "node": robot.current_node,
             "direction": robot.direction,
             "status": robot.status,
+            "in_queue": robot_id in queued_robot_ids,
+            "in_shared": robot_id in shared_robot_ids,
         }
     for robot in experiment.completed:
         robots[robot.robot_id] = {
             "node": robot.goal_node,
             "direction": robot.direction,
             "status": "completed",
+            "in_queue": False,
+            "in_shared": False,
         }
-    shared_robot_ids = sorted(set().union(*experiment.shared_robot_ids_by_area.values()))
     queues = {
         area_id: list(queue)
         for area_id, queue in experiment.fcfs_queues.items()
@@ -294,6 +327,8 @@ def _snapshot(experiment: FCFSCrossExperiment) -> dict:
         "step": experiment.step_count,
         "robots": robots,
         "shared_robot_ids": shared_robot_ids,
+        "shared_robot_ids_by_area": shared_robot_ids_by_area,
+        "queued_robot_ids": queued_robot_ids,
         "queues": queues,
     }
 
@@ -329,10 +364,14 @@ def _write_video(
         for subframe in range(subframes):
             alpha = _smoothstep(subframe / subframes)
             frame = base.copy()
+            renderer.draw_recent_trails(frame, snapshots, index, alpha)
+            renderer.draw_zone_status(frame, left)
             renderer.draw_robots(frame, left, right, alpha)
             renderer.draw_overlay(frame, policy, metrics, selected, left, alpha)
             writer.write(frame)
     frame = base.copy()
+    renderer.draw_recent_trails(frame, snapshots, len(snapshots) - 1, 1.0)
+    renderer.draw_zone_status(frame, snapshots[-1])
     renderer.draw_robots(frame, snapshots[-1], snapshots[-1], 1.0)
     renderer.draw_overlay(frame, policy, metrics, selected, snapshots[-1], 1.0)
     writer.write(frame)
@@ -378,6 +417,7 @@ class IsoRenderer:
             self.draw_tile(frame, row, col, color, label)
         for area in self.experiment.areas:
             self.draw_shared_zone_outline(frame, area)
+        self.draw_port_labels(frame)
         return frame
 
     def floor_frame(self) -> np.ndarray:
@@ -465,6 +505,113 @@ class IsoRenderer:
         )
         cv2.polylines(frame, [points], True, (42, 55, 76), 3, cv2.LINE_AA)
 
+    def draw_port_labels(self, frame: np.ndarray) -> None:
+        for direction, node_id in self.experiment.START_BY_DIRECTION.items():
+            if node_id not in self.experiment.graph.nodes:
+                continue
+            row, col = self.experiment.graph.nodes[node_id].position
+            x, y = self.project(col, row, 0.42)
+            self.draw_tag(frame, x, y - 24, f"IN {self.direction_short(direction)}", COLORS["start"])
+        for node_id, direction in self.experiment.EXIT_DIRECTION_BY_NODE.items():
+            if node_id not in self.experiment.graph.nodes:
+                continue
+            row, col = self.experiment.graph.nodes[node_id].position
+            x, y = self.project(col, row, 0.42)
+            self.draw_tag(frame, x, y - 24, f"OUT {self.direction_short(direction)}", COLORS["exit"])
+
+    def draw_tag(self, frame: np.ndarray, x: int, y: int, text: str, color: tuple[int, int, int]) -> None:
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 0.38
+        thickness = 1
+        (text_width, text_height), _ = cv2.getTextSize(text, font, scale, thickness)
+        pad_x, pad_y = 8, 5
+        x0 = int(x - text_width / 2 - pad_x)
+        y0 = int(y - text_height - pad_y)
+        x1 = int(x + text_width / 2 + pad_x)
+        y1 = int(y + pad_y)
+        self.alpha_rect(frame, x0, y0, x1, y1, _blend(color, (255, 255, 255), 0.20), 0.90, border=color)
+        cv2.putText(frame, text, (x0 + pad_x, y1 - pad_y), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
+
+    def direction_short(self, direction: str) -> str:
+        return {
+            "NORTH": "N",
+            "SOUTH": "S",
+            "WEST": "W",
+            "EAST": "E",
+            "L_NORTH": "L-N",
+            "L_SOUTH": "L-S",
+            "R_NORTH": "R-N",
+            "R_SOUTH": "R-S",
+        }.get(direction, direction[:3])
+
+    def draw_recent_trails(self, frame: np.ndarray, snapshots: list[dict], index: int, alpha: float, max_history: int = 9) -> None:
+        start = max(0, index - max_history)
+        active = snapshots[index]["robots"]
+        robot_ids = sorted(robot_id for robot_id, state in active.items() if state.get("status") != "completed")
+        for robot_id in robot_ids:
+            points: list[tuple[int, int]] = []
+            for snap in snapshots[start:index + 1]:
+                state = snap["robots"].get(robot_id)
+                point = self.robot_screen_point(state)
+                if point is not None:
+                    points.append(point)
+            if index + 1 < len(snapshots):
+                left_state = snapshots[index]["robots"].get(robot_id)
+                right_state = snapshots[index + 1]["robots"].get(robot_id)
+                interp = self.interpolated_robot_point(left_state, right_state, alpha)
+                if interp is not None:
+                    points.append(interp)
+            if len(points) < 2:
+                continue
+            color = ROBOT_COLORS.get(active[robot_id]["direction"], (70, 120, 170))
+            for segment_index in range(1, len(points)):
+                fade = segment_index / max(1, len(points) - 1)
+                segment_color = _blend(COLORS["background"], color, 0.25 + 0.55 * fade)
+                thickness = 1 + int(3 * fade)
+                cv2.line(frame, points[segment_index - 1], points[segment_index], segment_color, thickness, cv2.LINE_AA)
+
+    def robot_screen_point(self, state: dict | None) -> tuple[int, int] | None:
+        if not state or state["node"] not in self.experiment.graph.nodes:
+            return None
+        row, col = self.experiment.graph.nodes[state["node"]].position
+        return self.project(col, row, 0.42)
+
+    def interpolated_robot_point(self, left_state: dict | None, right_state: dict | None, alpha: float) -> tuple[int, int] | None:
+        if not left_state and not right_state:
+            return None
+        left_node = (left_state or right_state)["node"]
+        right_node = (right_state or left_state)["node"]
+        if left_node not in self.experiment.graph.nodes or right_node not in self.experiment.graph.nodes:
+            return None
+        left_row, left_col = self.experiment.graph.nodes[left_node].position
+        right_row, right_col = self.experiment.graph.nodes[right_node].position
+        row = left_row + (right_row - left_row) * alpha
+        col = left_col + (right_col - left_col) * alpha
+        return self.project(col, row, 0.42)
+
+    def draw_zone_status(self, frame: np.ndarray, snapshot: dict) -> None:
+        for index, area in enumerate(self.experiment.areas, start=1):
+            conflict_positions = [self.experiment.graph.nodes[node_id].position for node_id in area.conflict_zone_nodes]
+            center_row = sum(row for row, _ in conflict_positions) / len(conflict_positions)
+            center_col = sum(col for _, col in conflict_positions) / len(conflict_positions)
+            x, y = self.project(center_col, center_row, 0.88)
+            shared_count = len(snapshot.get("shared_robot_ids_by_area", {}).get(area.area_id, []))
+            queue_count = len(snapshot.get("queues", {}).get(area.area_id, []))
+            text = f"Zone {index}: {shared_count}/{self.experiment.shared_area_capacity}  Q:{queue_count}"
+            color = COLORS["shared"] if shared_count else COLORS["queue"] if queue_count else COLORS["muted"]
+            self.draw_status_badge(frame, x, y - 44, text, color)
+
+    def draw_status_badge(self, frame: np.ndarray, x: int, y: int, text: str, color: tuple[int, int, int]) -> None:
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 0.44
+        thickness = 1
+        (text_width, text_height), _ = cv2.getTextSize(text, font, scale, thickness)
+        x0, y0 = x - text_width // 2 - 12, y - text_height - 8
+        x1, y1 = x + text_width // 2 + 12, y + 8
+        self.alpha_rect(frame, x0, y0, x1, y1, COLORS["panel"], 0.72, border=color)
+        cv2.circle(frame, (x0 + 11, y0 + (y1 - y0) // 2), 4, color, -1, cv2.LINE_AA)
+        cv2.putText(frame, text, (x0 + 22, y1 - 9), font, scale, (246, 248, 250), thickness, cv2.LINE_AA)
+
     def draw_robots(self, frame: np.ndarray, left: dict, right: dict, alpha: float) -> None:
         robot_ids = sorted(set(left["robots"]) | set(right["robots"]))
         placements = []
@@ -526,6 +673,10 @@ class IsoRenderer:
         cv2.fillConvexPoly(frame, top, color, cv2.LINE_AA)
         cv2.polylines(frame, [top, right_face, front_face], True, (230, 235, 238), 1, cv2.LINE_AA)
         self.draw_agv_details(frame, row, col, x0, x1, y0, y1, z1, drow, dcol, color)
+        if state.get("in_shared"):
+            self.draw_status_ring(frame, row, col, z1, COLORS["shared"])
+        elif state.get("in_queue"):
+            self.draw_status_ring(frame, row, col, z1, COLORS["queue"])
         cx, cy = self.project(col, row, z1 + 0.02)
         label = _robot_number(robot_id)
         cv2.putText(frame, label, (int(cx) - 6 * len(label), int(cy) + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
@@ -551,18 +702,128 @@ class IsoRenderer:
         cv2.circle(frame, (hx, hy), 3, COLORS["headlight"], -1, cv2.LINE_AA)
         cv2.circle(frame, (hx, hy), 5, _blend(COLORS["headlight"], color, 0.62), 1, cv2.LINE_AA)
 
+    def draw_status_ring(self, frame: np.ndarray, row: float, col: float, z: float, color: tuple[int, int, int]) -> None:
+        cx, cy = self.project(col, row, z + 0.12)
+        cv2.circle(frame, (cx, cy), 19, _blend(color, (255, 255, 255), 0.08), 2, cv2.LINE_AA)
+        cv2.circle(frame, (cx, cy), 24, _blend(color, COLORS["background"], 0.30), 1, cv2.LINE_AA)
+
     def draw_overlay(self, frame: np.ndarray, policy: str, metrics: dict, selected: dict, snapshot: dict, alpha: float) -> None:
         step = snapshot["step"] + alpha
-        title = (
-            f"{POLICY_LABELS[policy]} | {selected['layout_key']} | "
-            f"run {selected['run_index']} | scenario {selected['scenario_case_id']} | step {step:.1f}"
+        total_time = max(1.0, float(metrics["total_time"]))
+        progress = min(1.0, step / total_time)
+        completed_now = sum(1 for state in snapshot["robots"].values() if state.get("status") == "completed")
+        robots_total = int(metrics["robots"])
+        queued_count = len(snapshot.get("queued_robot_ids", []))
+        shared_count = len(snapshot.get("shared_robot_ids", []))
+        accent = POLICY_ACCENTS.get(policy, COLORS["muted"])
+
+        self.alpha_rect(frame, 22, 20, 690, 166, COLORS["panel"], 0.78, border=accent)
+        cv2.rectangle(frame, (22, 20), (31, 166), accent, -1)
+        title = f"{POLICY_LABELS[policy]}  |  {selected['layout_key'].replace('_', ' ').title()}"
+        cv2.putText(frame, title, (46, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.78, (248, 250, 252), 2, cv2.LINE_AA)
+        case_line = (
+            f"run {selected['run_index']}  scenario {selected['scenario_case_id']} "
+            f"({selected['scenario_case_name']})  AGV {robots_total}"
         )
-        cv2.putText(frame, title, (32, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.72, COLORS["text"], 2, cv2.LINE_AA)
-        subtitle = (
-            f"AGV={metrics['robots']} total_time={metrics['total_time']} "
-            f"capacity={metrics['shared_area_capacity']} completed={metrics['completed']}"
-        )
-        cv2.putText(frame, subtitle, (32, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.48, COLORS["muted"], 1, cv2.LINE_AA)
+        cv2.putText(frame, case_line, (46, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (215, 222, 226), 1, cv2.LINE_AA)
+        status_line = f"step {step:.1f}/{metrics['total_time']}   completed {completed_now}/{robots_total}   in-zone {shared_count}   queue {queued_count}"
+        cv2.putText(frame, status_line, (46, 108), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (215, 222, 226), 1, cv2.LINE_AA)
+        self.draw_progress_bar(frame, 46, 126, 590, 15, progress, accent, label="time progress")
+        completion = completed_now / max(1, robots_total)
+        self.draw_progress_bar(frame, 46, 148, 590, 10, completion, COLORS["progress"], label="completion")
+
+        margin = _safe_float(selected.get("bo_margin_vs_best_other"))
+        if policy == "bo_heuristic" and margin is not None:
+            self.draw_status_badge(frame, 540, 196, f"Selected BO case: -{margin:g} steps vs best other", COLORS["bo"])
+
+        self.draw_policy_scoreboard(frame, policy, selected)
+        self.draw_legend(frame)
+
+    def draw_policy_scoreboard(self, frame: np.ndarray, current_policy: str, selected: dict) -> None:
+        x0 = self.width - 330
+        y0 = 24
+        width = 304
+        row_height = 34
+        totals = {policy: _selected_policy_total(selected, policy) for policy in POLICIES}
+        valid_totals = [value for value in totals.values() if value is not None]
+        best_total = min(valid_totals) if valid_totals else None
+        self.alpha_rect(frame, x0, y0, x0 + width, y0 + 184, COLORS["panel"], 0.74, border=(88, 96, 108))
+        cv2.putText(frame, "Policy Total_Time", (x0 + 18, y0 + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (248, 250, 252), 2, cv2.LINE_AA)
+        for row_index, policy in enumerate(POLICIES):
+            y = y0 + 52 + row_index * row_height
+            accent = POLICY_ACCENTS.get(policy, COLORS["muted"])
+            if policy == current_policy:
+                self.alpha_rect(frame, x0 + 12, y - 20, x0 + width - 12, y + 10, _blend(accent, COLORS["panel"], 0.40), 0.78)
+            cv2.circle(frame, (x0 + 28, y - 5), 6, accent, -1, cv2.LINE_AA)
+            label = POLICY_LABELS[policy].replace(" Heuristic", "")
+            total = totals[policy]
+            total_text = "-" if total is None else f"{total:g}"
+            marker = " BEST" if best_total is not None and total == best_total else ""
+            cv2.putText(frame, label, (x0 + 44, y), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (232, 236, 239), 1, cv2.LINE_AA)
+            cv2.putText(frame, total_text + marker, (x0 + 202, y), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (232, 236, 239), 1, cv2.LINE_AA)
+
+    def draw_legend(self, frame: np.ndarray) -> None:
+        x0 = 24
+        y0 = self.height - 132
+        self.alpha_rect(frame, x0, y0, x0 + 482, y0 + 104, COLORS["panel"], 0.62, border=(92, 101, 110))
+        cv2.putText(frame, "Visual guide", (x0 + 16, y0 + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (248, 250, 252), 1, cv2.LINE_AA)
+        items = [
+            ("IN", COLORS["start"]),
+            ("OUT", COLORS["exit"]),
+            ("Waiting", COLORS["waiting"]),
+            ("Conflict", COLORS["conflict"]),
+            ("Queue ring", COLORS["queue"]),
+            ("In-zone ring", COLORS["shared"]),
+        ]
+        for index, (label, color) in enumerate(items):
+            col = index % 3
+            row = index // 3
+            x = x0 + 18 + col * 150
+            y = y0 + 52 + row * 28
+            cv2.rectangle(frame, (x, y - 11), (x + 18, y + 7), color, -1)
+            cv2.rectangle(frame, (x, y - 11), (x + 18, y + 7), (235, 238, 240), 1)
+            cv2.putText(frame, label, (x + 26, y + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (224, 230, 234), 1, cv2.LINE_AA)
+
+    def draw_progress_bar(
+        self,
+        frame: np.ndarray,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        ratio: float,
+        color: tuple[int, int, int],
+        label: str = "",
+    ) -> None:
+        ratio = max(0.0, min(1.0, ratio))
+        cv2.rectangle(frame, (x, y), (x + width, y + height), (72, 80, 90), -1)
+        cv2.rectangle(frame, (x, y), (x + int(width * ratio), y + height), color, -1)
+        cv2.rectangle(frame, (x, y), (x + width, y + height), (180, 188, 196), 1)
+        if label:
+            cv2.putText(frame, label, (x + width + 10, y + height), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (202, 209, 214), 1, cv2.LINE_AA)
+
+    def alpha_rect(
+        self,
+        frame: np.ndarray,
+        x0: int,
+        y0: int,
+        x1: int,
+        y1: int,
+        color: tuple[int, int, int],
+        alpha: float,
+        border: tuple[int, int, int] | None = None,
+    ) -> None:
+        x0 = max(0, min(self.width - 1, int(x0)))
+        x1 = max(0, min(self.width - 1, int(x1)))
+        y0 = max(0, min(self.height - 1, int(y0)))
+        y1 = max(0, min(self.height - 1, int(y1)))
+        if x1 <= x0 or y1 <= y0:
+            return
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x0, y0), (x1, y1), color, -1)
+        cv2.addWeighted(overlay, alpha, frame, 1.0 - alpha, 0, frame)
+        if border is not None:
+            cv2.rectangle(frame, (x0, y0), (x1, y1), border, 1)
 
     def project(self, x: float, y: float, z: float) -> tuple[int, int]:
         return (
@@ -574,6 +835,25 @@ class IsoRenderer:
 def _robot_number(robot_id: str) -> str:
     digits = "".join(character for character in robot_id if character.isdigit())
     return digits[-2:] if len(digits) > 1 else digits or robot_id[-1]
+
+
+def _safe_float(value: object) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _selected_policy_total(selected: dict, policy: str) -> float | None:
+    keys = {
+        "fcfs": "fcfs_total_time",
+        "fixed_heuristic": "fixed_heuristic_total_time",
+        "bo_heuristic": "bo_heuristic_total_time",
+        "pso_heuristic": "pso_heuristic_total_time",
+    }
+    return _safe_float(selected.get(keys[policy]))
 
 
 def _smoothstep(value: float) -> float:
